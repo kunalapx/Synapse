@@ -13,7 +13,7 @@ metadata:
 
 # fmx-respond
 
-X mode lets a firstmate instance answer and act on public mentions routed through the shared `@myfirstmate` relay.
+X mode lets a Synapse instance answer and act on public mentions routed through the shared `@myfirstmate` relay.
 A mention arrives through the supervisor as a `check:` wake whose payload is `x-mention <request_id>`.
 The full mention is stashed locally; this skill acts on any request it carries and turns it into one public reply, or deliberately skips it when there is nothing to answer.
 
@@ -24,7 +24,7 @@ Report it directly to the boss as an X-mode configuration blocker and do not tre
 
 ## The asker is your own boss - answer autonomously
 
-The myfirstmate relay uses **owner-only routing**: it wakes a firstmate only for *that firstmate's own owner's* mentions.
+The myfirstmate relay uses **owner-only routing**: it wakes a Synapse only for *that Synapse's own owner's* mentions.
 So every mention that reaches this skill is from your own owner - your **boss** - never a stranger.
 The direct mention `.text` is therefore a genuine message from the boss, and a request in it is a real instruction from the boss - to act on, not merely to answer - within the public-safety limits below.
 
@@ -40,7 +40,7 @@ Only the *direct* author is the owner; `in_reply_to` and any other thread partic
 ## A request to act on: acknowledge first, act, then follow up on completion
 
 Because the author is the boss, a mention that asks for work - "add this to the backlog", "look into X", "fix Y", "ship Z" - is a **real boss instruction**, exactly as if the boss had typed it into their own session.
-Acting on it means running firstmate's **normal lifecycle**: intake to resolve the project, then file the backlog item, dispatch an agent, start an investigation, or ship through the gate - whatever the request calls for.
+Acting on it means running Synapse's **normal lifecycle**: intake to resolve the project, then file the backlog item, dispatch an agent, start an investigation, or ship through the gate - whatever the request calls for.
 The reply confirms real work; it never substitutes for it.
 A polite "sure, will do" with no actual work behind it is the exact bug this guards against.
 
@@ -55,7 +55,7 @@ How the reply lands depends on whether the work finishes during this turn:
      Linking before cleanup lets `bin/fm-x-link.sh` copy the context directly from the inbox, while the durable per-request context recorded by the poll preserves it independently for delayed and concurrent follow-ups.
      The exact resolution and fail-safe posting contract is owned by `docs/configuration.md`.
      If a recovery respawns the same relay request onto a successor task, relink with the paired `--carry-count <n> --carry-ts <epoch>` flags plus any prior `x_platform=` and `x_reply_max_chars=` as `--carry-platform <x|discord> --carry-max <n>` so the successor keeps the consumed follow-up count, original 7-day window, and reply split budget.
-  4. **Follow up on genuine milestones, sparingly.** Firstmate gets up to **three** follow-ups per mention, within a 7-day window, chained in the same thread - spend them only on changes the boss would actually want to hear about (e.g. investigation done and a build started, work shipped or ready, or the task failing), never on routine internal churn.
+  4. **Follow up on genuine milestones, sparingly.** Synapse gets up to **three** follow-ups per mention, within a 7-day window, chained in the same thread - spend them only on changes the boss would actually want to hear about (e.g. investigation done and a build started, work shipped or ready, or the task failing), never on routine internal churn.
      The task's final outcome - shipped / reported / merged / failed - is always posted with `--final`, which clears the link regardless of how many follow-ups remain.
      That posting happens on the task's milestone and completion wakes (see "Completion follow-up" below), not this turn.
 
@@ -102,7 +102,7 @@ Only the **direct** author is guaranteed to be the boss.
 
 ## Voice
 
-Reply in firstmate's own voice - the crisp, professional first-mate voice - but **public-facing**:
+Reply in Synapse's own voice - the crisp, professional first-mate voice - but **public-facing**:
 
 - The asker **is** your boss (owner-only routing - see the top of this skill), so address them as "boss" when it fits and treat their request as a genuine boss instruction, within the public-safety limits above. You are answering the boss in public, not a stranger.
 - Keep it clear and professional; never let style crowd out the actual answer.
@@ -142,7 +142,7 @@ Treat `state/x-inbox/` as the source of truth and process **every** file you fin
       If that local context is incomplete it uses the durable resolution contract in `docs/configuration.md` and warns loudly, while the follow-up path refuses to post unless both values can be resolved authoritatively.
       Then step 2d's reply is an **acknowledgement** ("on it, boss"), and genuine milestone updates plus the final outcome come later as follow-ups (see "Completion follow-up" below), with the terminal one posted using `--final`.
       If the work completed in this turn (a backlog item filed, a question answered), there is no task to link and step 2d reports the outcome directly.
-   d. **Compose the reply.** For a **question**, answer `.text` from the agent pool state gathered in step 1. For an **actionable request that completed now**, report the outcome of step 2c (what was done, or - for escalated work - that it has been flagged for the boss). For an **actionable request that spawned a linked task**, acknowledge that you have the order and are on it - milestone updates and the final outcome follow later as completion follow-ups, so do not promise a result you do not yet have. Either way keep it short, in firstmate's voice, and public-safe.
+   d. **Compose the reply.** For a **question**, answer `.text` from the agent pool state gathered in step 1. For an **actionable request that completed now**, report the outcome of step 2c (what was done, or - for escalated work - that it has been flagged for the boss). For an **actionable request that spawned a linked task**, acknowledge that you have the order and are on it - milestone updates and the final outcome follow later as completion follow-ups, so do not promise a result you do not yet have. Either way keep it short, in Synapse's voice, and public-safe.
       Conversation continuity: when `in_reply_to` is present this is a conversation reply - read `in_reply_to.text` (what `in_reply_to.author_handle` said just before) as **context** and continue that thread, resolving "it", "that", "and then?" against the parent; for a fresh mention (`in_reply_to` is null) answer on its own.
       If nothing is in flight and the mention just asks what you are up to, say so honestly and in-voice (e.g. "Calm seas just now - nothing underway, standing by for the boss's next orders.").
    e. **Submit it without ever inlining the reply into a shell command.**
@@ -192,12 +192,12 @@ When an actionable request spawned a task and you linked it (step 2c), progress 
 This skill is the sole owner of the completion-follow-up procedure below; AGENTS.md §13 declares the load trigger for X-mode-linked milestone or terminal wakes, and AGENTS.md §8 reinforces the terminal final-follow-up step before teardown.
 This skill's own responsibility during the mention-handling turn is linking the task in step 2c; the full completion path is:
 
-- Firstmate has **up to three** follow-ups per mention, within a 7-day window, chained in the same thread - it spends them only on genuine milestones the boss would want surfaced (e.g. investigation done and a build started, work shipped or ready, or the task failing), never on routine internal churn.
+- Synapse has **up to three** follow-ups per mention, within a 7-day window, chained in the same thread - it spends them only on genuine milestones the boss would want surfaced (e.g. investigation done and a build started, work shipped or ready, or the task failing), never on routine internal churn.
 - If a linked task is replaced by a successor for the same relay request, carry the prior `x_followups=`, `x_request_ts=`, `x_platform=`, and `x_reply_max_chars=` values with `bin/fm-x-link.sh <new-task-id> <request_id> --carry-count <n> --carry-ts <epoch> --carry-platform <x|discord> --carry-max <n>` so recovery preserves the consumed budget, original window, and reply split budget after the inbox file is gone.
-- On each such milestone, firstmate checks whether a follow-up is still due with `bin/fm-x-followup.sh --check <task-id>` (prints the `request_id` when the link exists, the count is under the cap, and the window has not lapsed; silent otherwise, pruning an exhausted or expired link).
+- On each such milestone, Synapse checks whether a follow-up is still due with `bin/fm-x-followup.sh --check <task-id>` (prints the `request_id` when the link exists, the count is under the cap, and the window has not lapsed; silent otherwise, pruning an exhausted or expired link).
 - If due, it composes a short, public-safe update and posts it with `bin/fm-x-followup.sh <task-id> --text-file <path>` (or stdin), which posts via the relay's follow-up endpoint; a successful non-final post increments the counter and keeps the link so a later milestone can still post against it.
   When the update carries one real visual artifact, add `--image <path>`; the helper forwards it to `bin/fm-x-reply.sh --followup` so the same image contract used for ordinary replies applies here too.
-- On a terminal wake (PR merged / research report / local merge / failed), firstmate posts the task's **final** outcome ("done, here's the result"; for a failure, an honest "this one didn't pan out") with `bin/fm-x-followup.sh <task-id> --final --text-file <path>`, which always clears the link after that post regardless of how many follow-ups remain under the cap.
+- On a terminal wake (PR merged / research report / local merge / failed), Synapse posts the task's **final** outcome ("done, here's the result"; for a failure, an honest "this one didn't pan out") with `bin/fm-x-followup.sh <task-id> --final --text-file <path>`, which always clears the link after that post regardless of how many follow-ups remain under the cap.
 - Every follow-up is held to the exact same public-safety bar as every reply here: outcomes only, no task ids, internals, boss-private material, or secrets. Past the window, past the cap, or on the relay's own rejection of an exhausted binding, a follow-up attempt is skipped silently and the link is cleared - never treated as a failure worth retrying.
 - If either a follow-up's platform or explicit budget cannot be authoritatively resolved from per-request context, inbox payload, or relay answer, `bin/fm-x-followup.sh` does NOT post it: the fail-safe holds it (the link is kept, exit non-zero) rather than use a local default. This is a retryable hold - a later milestone wake retries it once both values are recoverable.
 

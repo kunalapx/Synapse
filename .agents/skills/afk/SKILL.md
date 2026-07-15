@@ -10,7 +10,7 @@ metadata:
 
 Away-mode supervision. When invoked, `/afk` makes the daemon's token-saving
 tradeoff **consented** and **explicit**: the boss is stepping away, so the
-sub-supervisor may triage routine wakes in bash instead of waking firstmate's
+sub-supervisor may triage routine wakes in bash instead of waking Synapse's
 LLM for each one. Escalations still reach the boss, but as one pre-read,
 batched digest rather than per-wake injections.
 
@@ -19,7 +19,7 @@ batched digest rather than per-wake injections.
 1. **Enter the lifecycle through `bin/fm-afk-launch.sh`.**
    This owns the durable state write, session-scoped stale-artifact clearing,
    terminal record, and rollback.
-   The flag survives a firstmate restart, so recovery re-enters afk when it is present.
+   The flag survives a Synapse restart, so recovery re-enters afk when it is present.
 
 2. **Ensure the sub-supervisor daemon is running as a tracked background process.**
    Its hosting differs by harness.
@@ -60,7 +60,7 @@ No `/back` is needed. The first genuine message is the return signal:
 - A message **without** the sentinel marker and **not** starting with `/afk` -> the boss is back.
   Run `bin/fm-afk-return.sh` before acting on the message that brought the boss back.
   That script owns correct-ordered daemon shutdown, durable wake draining, escalation and wedge evidence, and the return-catch-up gate.
-  If it reports a firstmate-actionable `blocked:` event, remediate it immediately through the normal lifecycle, or explicitly reclassify it with a durable reason and close its decision key with `resolved [key=...]`, then run `bin/fm-afk-return.sh check`.
+  If it reports a Synapse-actionable `blocked:` event, remediate it immediately through the normal lifecycle, or explicitly reclassify it with a durable reason and close its decision key with `resolved [key=...]`, then run `bin/fm-afk-return.sh check`.
   Once the daemon stops, resume full per-wake responsiveness through the emitted primary-harness supervision protocol while blocker handling proceeds, so the gate never creates a blind wait.
   Do not answer a Bearings request or perform any other ordinary boss work until the check exits successfully.
 - A message **with** the sentinel marker (`FM_INJECT_MARK`, U+2063 INVISIBLE SEPARATOR) -> it is a daemon escalation; stay afk and process it.
@@ -72,7 +72,7 @@ a false exit is self-correcting (the boss re-runs `/afk`).
 
 ## Orthogonal to approval authority
 
-afk changes how aggressively firstmate surfaces things, **not who approves
+afk changes how aggressively Synapse surfaces things, **not who approves
 what**. "Away" never means "approves more." A PR ready for merge, a
 needs-decision finding, or anything destructive still waits for the boss's
 explicit word - the daemon just batches the notification.
@@ -80,7 +80,7 @@ explicit word - the daemon just batches the notification.
 ## Sentinel marker contract
 
 The daemon prefixes every injection with `FM_INJECT_MARK` (U+2063 INVISIBLE SEPARATOR), which has no normal keyboard keystroke and survives terminal transport as UTF-8 text.
-This is how firstmate tells a daemon escalation apart from a real message in the same pane.
+This is how Synapse tells a daemon escalation apart from a real message in the same pane.
 The marker travels with the message text; it does not rely on harness-level typed-vs-injected detection, which is not portable across claude, codex, opencode, pi, and grok.
 
 ## Busy-guard and composer guard
@@ -122,15 +122,15 @@ border-aware detector as the composer guard.
 For herdr, normal idle-baseline submits are confirmed by native agent-state showing a real turn started; the ANSI-aware composer classifier remains the affirmative-empty pre-injection guard and conservative fallback for non-idle or unreadable baselines.
 A bordered-empty or ghost-only composer is recognized as empty where that backend uses composer confirmation, rather than mistaken for a swallowed Enter.
 `fm-send.sh` uses the same primitive and exits non-zero
-when a steer's Enter is positively swallowed, so firstmate learns an instruction
+when a steer's Enter is positively swallowed, so Synapse learns an instruction
 did not land instead of leaving it unsubmitted.
 
 ## Classification policy
 
 The daemon wraps `fm-watch.sh`, runs the supervisor as a child, classifies each
 wake reason in bash, and self-handles the routine majority without consuming a
-firstmate turn.
-Boss-relevant events, plus a bounded recheck of a declared external wait that remains idle, escalate to firstmate's context as one pre-read, single-line, batched digest.
+Synapse turn.
+Boss-relevant events, plus a bounded recheck of a declared external wait that remains idle, escalate to Synapse's context as one pre-read, single-line, batched digest.
 The classification predicates (the boss-relevant verb set, declared-pause vocabulary, signal/stale tests, and agent-pool-scan) live in the shared `bin/fm-classify-lib.sh`, the same library the always-on supervisor uses for its own triage when afk is off, so the two modes apply one identical policy.
 While `state/.afk` exists the daemon owns the supervisor, so the supervisor reverts to one-shot and lets the daemon do the triage - the two never run their triage at the same time.
 
@@ -141,13 +141,13 @@ Classify each wake this way:
   -> self-handle. Boss-relevant verb -> escalate.
 - `signal` or `stale` for a declared `paused:` external wait -> self-handle and track the pause rather than a wedge.
   If it remains declared and idle past `FM_PAUSE_RESURFACE_SECS` (default 3600s), housekeeping sends one awaiting-external recheck and resets the pause window.
-- `check` -> always escalate. Check scripts print only when firstmate should wake.
+- `check` -> always escalate. Check scripts print only when Synapse should wake.
 - `stale` with a terminal status -> escalate. Non-terminal stale is transient:
   record a marker and self-handle. If the pane is still idle past
   `FM_STALE_ESCALATE_SECS` (default 240s), housekeeping escalates it as a
   possible wedge. This bounds wedge-detection latency to the threshold plus a
   tick: a delay, never a loss. Healthy agents are autonomous and do not wait
-  on firstmate mid-task.
+  on Synapse mid-task.
 - `heartbeat` -> self-handle. The daemon runs its own cheap bash agent pool scan
   every `FM_HEARTBEAT_SCAN_SECS` (default 300s) as the catch-all for a
   boss-relevant status line the per-wake classifier might miss.
@@ -157,7 +157,7 @@ Escalations are buffered up to `FM_ESCALATE_BATCH_SECS` (default 90s; 0 =
 immediate) and flushed as one single-line digest prefixed with the sentinel
 marker, carrying pre-read status summaries and a recommended action.
 The single-line format makes the submission unambiguous across harnesses, and
-the marker lets firstmate distinguish it from a real boss message.
+the marker lets Synapse distinguish it from a real boss message.
 
 ## Injection hardening
 
@@ -189,7 +189,7 @@ the marker lets firstmate distinguish it from a real boss message.
   For herdr's normal idle-baseline path it means native agent-state observed a real turn start; herdr uses the ANSI-aware structural classifier for the pre-injection composer guard and fallback paths.
   This lets ghost-only or bordered-empty composers count as empty where a composer read is the active confirmation signal.
 - **Marker strip** - `strip_injection_marker` removes the sentinel prefix before
-  classification or relay, so the digest text firstmate sees is clean.
+  classification or relay, so the digest text Synapse sees is clean.
 - **Portable singleton lock** - the daemon uses the repo's portable lock helper
   (`fm-wake-lib.sh`) instead of `flock`, which is absent on macOS.
 - **Dedupe across signal/stale/scan** - `classify_signal` and `classify_stale`
@@ -203,7 +203,7 @@ the marker lets firstmate distinguish it from a real boss message.
   `FM_SUPERVISOR_TARGET` override (a tmux target or a herdr
   `"<session>:<pane-id>"` target), then `$TMUX_PANE`, then
   `"${HERDR_SESSION:-default}:${HERDR_PANE_ID}"` under herdr, then a
-  `firstmate:0` fallback with a warning. Both resolution sources are logged at
+  `Synapse:0` fallback with a warning. Both resolution sources are logged at
   startup so a wrong-but-resolving fallback is detectable. Other runtime
   backends, including zellij, orca, and cmux, are not yet supported as
   supervisor backends; the daemon refuses loudly at startup instead of

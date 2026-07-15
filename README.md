@@ -1,4 +1,4 @@
-<h1 align="center">firstmate</h1>
+<h1 align="center">MomentScience Synapse</h1>
 <p align="center">
   <a
     href="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue?style=flat-square"
@@ -21,7 +21,7 @@
 <h3 align="center">Talk to one agent. Ship with a crew.</h3>
 
 <p align="center">
-  <img alt="firstmate - talk to one agent, ship with a crew" src="assets/banner.png" width="100%" />
+  <img alt="Synapse - talk to one agent, ship with a crew" src="assets/banner.png" width="100%" />
 </p>
 
 ## What it is
@@ -29,27 +29,27 @@
 You can run one coding agent easily.
 But the moment you want three project tasks done in parallel - fixes, investigations, plans, audits - you become a tab-juggler: babysitting sessions, copy-pasting context between repos, forgetting which terminal had the failing test.
 
-firstmate flips the model.
-You talk to a single agent - the first mate - and it runs the crew for you: spawning autonomous agents in a visible session backend, giving each a clean git worktree, supervising them to completion, and handing you finished PRs, approved local merges, or standalone investigation reports.
-For larger agent pools, you can opt in to persistent domain agents: domain supervisors that are still ordinary direct reports, but run from their own isolated firstmate homes.
+Synapse flips the model.
+You talk to a single agent - Synapse - and it runs the crew for you: spawning autonomous agents in a visible session backend, giving each a clean git worktree, supervising them to completion, and handing you finished PRs, approved local merges, or standalone investigation reports.
+For larger agent pools, you can opt in to persistent domain agents: domain supervisors that are still ordinary direct reports, but run from their own isolated Synapse homes.
 
-firstmate is not a model, not a harness, not a skill, not an MCP server, and not a CLI.
-firstmate is an agent distro for running a crew of agents.
+Synapse is not a model, not a harness, not a skill, not an MCP server, and not a CLI.
+Synapse is an agent distro for running a crew of agents.
 An agent distro is a portable directory of instructions, skills, tooling, policies, and state conventions that turns a general-purpose agent into a specialized one.
-There is no app to install: the cloned repo is the distro - `AGENTS.md`, bundled firstmate skills, and helper scripts that any terminal coding agent can follow.
-Launching a supported harness inside it instantiates your first mate - and makes you the boss.
+There is no app to install: the cloned repo is the distro - `AGENTS.md`, bundled Synapse skills, and helper scripts that any terminal coding agent can follow.
+Launching a supported harness inside it instantiates your Synapse - and makes you the boss.
 
 ## Features
 
-- **One liaison** - you talk only to the first mate; it dispatches, supervises, escalates only real decisions, and reports plain outcomes.
-- **A visible crew** - every agent works in its own tmux window, experimental herdr/zellij tab, cmux workspace, or Orca terminal you can watch or type into; the first mate reconciles.
+- **One liaison** - you talk only to Synapse; it dispatches, supervises, escalates only real decisions, and reports plain outcomes.
+- **A visible crew** - every agent works in its own tmux window, experimental herdr/zellij tab, cmux workspace, or Orca terminal you can watch or type into; Synapse reconciles.
 - **Disposable worktrees** - each task runs in a clean [treehouse](https://github.com/kunchenguid/treehouse) git worktree, or an Orca-managed worktree when `backend=orca`, so parallel work on one repo never collides.
 - **Two task shapes** - execution tasks deliver a change; research tasks investigate, plan, reproduce, or audit and leave a report.
 - **Explicit project modes** - each project ships via `no-mistakes`, `direct-PR`, or `local-only`, with an optional `+yolo` autonomy flag.
-- **Optional domain agents** - opt in to persistent domain supervisors that run from isolated firstmate homes with their own `FM_HOME`, state, projects, and session lock, supervising project clones or a project-less firstmate-repo domain, kept on the primary firstmate version by guarded local fast-forwards and checked for live agent processes at session start.
-- **Event-driven, zero-token supervision** - a bash supervisor sleeps on the agent pool and wakes the first mate only when something needs you; verified primary harnesses also get a turn-end backstop that blocks or follows up on a blind stop when work is in flight and supervision is not live.
-- **Optional X mode** - opt in with one local `.env` token so firstmate can answer your public `@myfirstmate` mentions, act on normal reversible mention requests through the same lifecycle as chat requests, acknowledge spawned work, and post up to three public-safe completion follow-ups within seven days for genuine milestones and the final outcome without changing non-X behavior; dry-run preview records would-be replies and dismissals locally before go-live.
-- **Guarded by construction** - the first mate is read-only over your projects outside guarded clone refreshes, safe branch pruning, and approved `local-only` fast-forward merges; agents make every project change behind your merge approval.
+- **Optional domain agents** - opt in to persistent domain supervisors that run from isolated Synapse homes with their own `FM_HOME`, state, projects, and session lock, supervising project clones or a project-less Synapse-repo domain, kept on the primary Synapse version by guarded local fast-forwards and checked for live agent processes at session start.
+- **Event-driven, zero-token supervision** - a bash supervisor sleeps on the agent pool and wakes Synapse only when something needs you; verified primary harnesses also get a turn-end backstop that blocks or follows up on a blind stop when work is in flight and supervision is not live.
+- **Optional X mode** - opt in with one local `.env` token so Synapse can answer your public `@myfirstmate` mentions, act on normal reversible mention requests through the same lifecycle as chat requests, acknowledge spawned work, and post up to three public-safe completion follow-ups within seven days for genuine milestones and the final outcome without changing non-X behavior; dry-run preview records would-be replies and dismissals locally before go-live.
+- **Guarded by construction** - Synapse is read-only over your projects outside guarded clone refreshes, safe branch pruning, and approved `local-only` fast-forward merges; agents make every project change behind your merge approval.
 - **Restart-proof** - all state lives on disk and in the active session backend (tmux by hard default, herdr or cmux when selected or auto-detected, zellij/orca when explicitly selected); kill the session anytime and the next one reconciles, including confirmed-dead domain agents, and carries on.
 
 Full detail on every feature lives in [docs/architecture.md](docs/architecture.md).
@@ -62,11 +62,11 @@ Full detail on every feature lives in [docs/architecture.md](docs/architecture.m
 - Git and the GitHub CLI, authenticated through `gh auth login`.
 - tmux, for the reference session backend.
 
-The first mate detects and offers to install everything else.
+Synapse detects and offers to install everything else.
 
 ### Recommended harnesses
 
-**Claude Code, Grok, and Pi are equal co-primary recommendations** for running the primary firstmate session.
+**Claude Code, Grok, and Pi are equal co-primary recommendations** for running the primary Synapse session.
 Claude Code and Grok use background-notify wake cycles; Pi uses its tracked primary supervisor extension.
 All three have verified turn-end guard paths when launched with their documented setup.
 Pick whichever one matches your subscription and workflow.
@@ -109,7 +109,7 @@ For Pi, approve the project trust prompt once per clone on first launch so both 
 ```sh
 > hey, look at my github project xyz, then fix the flaky login test and add dark mode
 
-# firstmate checks its toolchain (asking your consent before installing anything),
+# Synapse checks its toolchain (asking your consent before installing anything),
 # clones the project under projects/, and spawns two agents in the active backend
 # fm-fix-login-k3 and fm-dark-mode-p7.
 # Minutes later:
@@ -131,8 +131,8 @@ Setup guides for tmux (the default) and every other supported backend (herdr, ze
                   │  chat: requests, decisions, "merge it"
                   ▼
  ┌─────────────────────────────────────────┐
- │ firstmate            (this repo)        │
- │ reads projects/ + firstmate routes      │
+ │ Synapse              (this repo)        │
+ │ reads projects/ + Synapse routes        │
  │ writes guarded backlog/task specs/state │
  └──┬──────────────┬───────────────┬───────┘
     │ backend sends / status files │
@@ -149,7 +149,7 @@ Setup guides for tmux (the default) and every other supported backend (herdr, ze
      └─ research task: report at data/<id>/report.md ► relay findings ► teardown
 ```
 
-You chat with the first mate.
+You chat with Synapse.
 It routes each request to an agent in its own session endpoint and git worktree, supervises the agent pool with a zero-token event-driven supervisor, and brings you finished PRs, approved local merges, or investigation reports.
 Optional domain agents extend this to persistent domain supervisors, dispatch profiles let you steer which harness handles which task, and an opt-in X mode lets the same agent pool answer public mentions.
 `codex-app` is not a runtime backend yet; [docs/codex-app-backend.md](docs/codex-app-backend.md) owns the Codex App boundary.
@@ -158,27 +158,27 @@ Full architecture - the supervision engine, worktree isolation, domain agents, d
 
 ## Built-in skills
 
-Firstmate ships these user-invocable built-in skills.
+Synapse ships these user-invocable built-in skills.
 Claude and grok use the slash form shown here; codex uses the same names with `$`, such as `$afk`.
 
 | Skill              | What it does                                                                                                                                  |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/afk`             | Enter away-mode supervision: the sub-supervisor self-handles routine wakes in bash, escalates boss-relevant events and bounded declared-external-wait rechecks as batched digests, and actively alerts if delivery wedges while you step away |
 | `/bearings`        | Generate a standalone current-status report from bounded local agent pool and registered-domain agent state, with live PR enrichment only when requested, written to a dated file in `data/` and surfaced concisely in chat; read-mostly, mutates no task state |
-| `/updatefirstmate` | Self-update the running firstmate and its domain agents to the latest from origin with fast-forward-only pulls, then re-read instructions and nudge domain agents |
+| `/updatefirstmate` | Self-update the running Synapse and its domain agents to the latest from origin with fast-forward-only pulls, then re-read instructions and nudge domain agents |
 | `/stow`            | Sweep the session for uncaptured durable knowledge, route each finding to its disk home per AGENTS.md, file undone next steps to the backlog, and report what is now safe to reset |
 
-Agent-only reference skills live under `.agents/skills/` and are loaded by firstmate at the trigger points named in [`AGENTS.md`](AGENTS.md).
+Agent-only reference skills live under `.agents/skills/` and are loaded by Synapse at the trigger points named in [`AGENTS.md`](AGENTS.md).
 
 ### Two-tier skill layout
 
-Firstmate's skills live in two separate places with different audiences:
+Synapse's skills live in two separate places with different audiences:
 
-- `.agents/skills/` - agent-loaded skills (this section's table, plus firstmate's agent-only reference skills). Every one of these assumes a live firstmate home and is meaningless, or actively misleading, installed anywhere else, so each carries `metadata.internal: true` in its frontmatter. That flag hides them from installer discovery (tools like the [skills.sh](https://skills.sh) `npx skills add` installer) without affecting how firstmate itself loads them - frontmatter metadata is inert to the agent's own skill loader.
-- `skills/` - public, installer-facing skills meant to be installed standalone into any project, independent of firstmate.
-  Each one is a self-contained skill with no dependency on firstmate's paths, tools, or vocabulary.
+- `.agents/skills/` - agent-loaded skills (this section's table, plus Synapse's agent-only reference skills). Every one of these assumes a live Synapse home and is meaningless, or actively misleading, installed anywhere else, so each carries `metadata.internal: true` in its frontmatter. That flag hides them from installer discovery (tools like the [skills.sh](https://skills.sh) `npx skills add` installer) without affecting how Synapse itself loads them - frontmatter metadata is inert to the agent's own skill loader.
+- `skills/` - public, installer-facing skills meant to be installed standalone into any project, independent of Synapse.
+  Each one is a self-contained skill with no dependency on Synapse's paths, tools, or vocabulary.
   Today that is `skills/stow`, a generic session-knowledge-sweep skill that routes findings by explicit instruction first, then existing local conventions, then a private `.stow-notes.md` fallback in the current directory, and closes with a resume pointer for the next session.
-  It intentionally shares no code with the firstmate-internal `.agents/skills/stow` it is named after, so the two can evolve independently.
+  It intentionally shares no code with the Synapse-internal `.agents/skills/stow` it is named after, so the two can evolve independently.
 
 ## Documentation
 
@@ -194,7 +194,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/turnend-guard.md](docs/turnend-guard.md) - the primary session's structural "no turn ends blind" backstop: verified per-harness hook mechanisms, scoping, loop safety, and fail-open tradeoffs.
 - [docs/supervision-protocols/](docs/supervision-protocols/) - rendered primary-harness supervisor protocols for Claude, Codex, OpenCode, Pi, Grok, and unknown harness fallback.
 - [docs/scripts.md](docs/scripts.md) - the `bin/` toolbelt reference.
-- [`AGENTS.md`](AGENTS.md) - the distro's core instruction file and the first mate's full operating manual.
+- [`AGENTS.md`](AGENTS.md) - the distro's core instruction file and Synapse's full operating manual.
 - [CONTRIBUTING.md](CONTRIBUTING.md) - how to contribute, including the dev/test commands.
 
 ## Contributing

@@ -30,9 +30,9 @@ test_firstmate_never_responds_for_crew_run() {
   local contract
   contract=$(validate_contract)
 
-  assert_contains "$contract" "Firstmate never invokes \`no-mistakes axi respond\` for a crew-owned run." \
-    "Validate contract permits Firstmate to respond directly for a crew-owned run"
-  pass "Validate contract forbids Firstmate from responding directly for a crew-owned run"
+  assert_contains "$contract" "Synapse never invokes \`no-mistakes axi respond\` for a crew-owned run." \
+    "Validate contract permits Synapse to respond directly for a crew-owned run"
+  pass "Validate contract forbids Synapse from responding directly for a crew-owned run"
 }
 
 test_worker_owns_synchronous_driver
