@@ -740,6 +740,39 @@ EOF
   pass "session start rejects Pi loaded markers from previous sessions"
 }
 
+# --- startup banner ----------------------------------------------------------
+
+test_startup_banner_leads_and_plain_text_fallback() {
+  local rec root home fakebin out banner_line session_line lock_line
+  rec=$(new_world startup-banner)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  # The framed wordmark and both subtitle lines render byte-for-byte.
+  assert_contains "$out" "███████╗██╗" "startup banner wordmark missing"
+  assert_contains "$out" "MomentScience Engineering" "startup banner subtitle missing"
+  assert_contains "$out" "orchestration · memory · review" "startup banner tagline missing"
+  # The box frame is intact (top-left and bottom-right corners present).
+  assert_contains "$out" "╔═══" "startup banner top border missing"
+  assert_contains "$out" "═══╝" "startup banner bottom border missing"
+
+  # It leads the digest: ahead of the SESSION START header and the LOCK section.
+  banner_line=$(printf '%s\n' "$out" | grep -n 'MomentScience Engineering' | head -1 | cut -d: -f1)
+  session_line=$(printf '%s\n' "$out" | grep -n 'SESSION START -' | head -1 | cut -d: -f1)
+  lock_line=$(printf '%s\n' "$out" | grep -n '^LOCK$' | head -1 | cut -d: -f1)
+  [ -n "$banner_line" ] && [ -n "$session_line" ] && [ -n "$lock_line" ] || fail "banner/session/lock lines missing: $out"
+  [ "$banner_line" -lt "$session_line" ] || fail "startup banner did not precede the SESSION START header"
+  [ "$session_line" -lt "$lock_line" ] || fail "SESSION START header did not precede the LOCK section"
+
+  pass "startup banner leads the digest with the captain's framed design intact"
+}
+
+test_startup_banner_leads_and_plain_text_fallback
 test_context_digest_absent_empty_present
 test_lock_refusal_read_only_path
 test_output_ordering_diagnostics_lead

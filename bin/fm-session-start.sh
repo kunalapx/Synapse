@@ -91,6 +91,33 @@ SUBRULE='-----------------------------------------------------------------------
 section() { printf '\n%s\n%s\n%s\n' "$RULE" "$1" "$RULE"; }
 subsection() { printf '\n%s\n%s\n' "$1" "$SUBRULE"; }
 
+# print_banner: the Synapse startup banner (the captain's fixed design),
+# printed once as the very first thing a session-start digest emits
+# (AGENTS.md section 3). Identity only - it never gates anything and prints
+# in both locked and read-only sessions. The framed box-drawing/block art is
+# emitted through a single-quoted heredoc so bash reproduces every multi-byte
+# UTF-8 glyph byte-for-byte, with no expansion or reinterpretation that could
+# misalign the frame. Every line is 65 display columns wide, so the right
+# border stays flush on any UTF-8 terminal.
+print_banner() {
+  printf '\n'
+  cat <<'BANNER'
+╔═══════════════════════════════════════════════════════════════╗
+║                                                               ║
+║  ███████╗██╗   ██╗███╗   ██╗ █████╗ ██████╗ ███████╗███████╗  ║
+║  ██╔════╝╚██╗ ██╔╝████╗  ██║██╔══██╗██╔══██╗██╔════╝██╔════╝  ║
+║  ███████╗ ╚████╔╝ ██╔██╗ ██║███████║██████╔╝███████╗█████╗    ║
+║  ╚════██║  ╚██╔╝  ██║╚██╗██║██╔══██║██╔═══╝ ╚════██║██╔══╝    ║
+║  ███████║   ██║   ██║ ╚████║██║  ██║██║     ███████║███████╗  ║
+║  ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝     ╚══════╝╚══════╝  ║
+║                                                               ║
+║                   MomentScience Engineering                   ║
+║                orchestration · memory · review                ║
+║                                                               ║
+╚═══════════════════════════════════════════════════════════════╝
+BANNER
+}
+
 # print_file_or_absent <path> <label>: full contents under a labeled
 # subsection, or an explicit ABSENT marker. Absence is semantically
 # meaningful for every one of these files (captain.md absent = template
@@ -138,6 +165,8 @@ pi_extension_loaded() {
   [ -n "$marker_pid" ] || return 1
   [ "$marker_version" = "$expected_version" ] && [ "$marker_pid" = "$lock_pid" ]
 }
+
+print_banner
 
 section "SESSION START - $FM_HOME"
 
