@@ -371,8 +371,8 @@ EOF
       and (.decisions_open | any(.[]; .id == "domain-alpha/phase8" and .key == "release"
         and .verb == "needs-decision" and (.summary | contains("release A or B"))))
       and (.in_flight | any(.[]; .id == "domain-alpha") | not)
-  ' >/dev/null || fail "structured child decision did not reach Captain Call: $json"
-  pass "a real structured child decision reaches Captain's Call"
+  ' >/dev/null || fail "structured child decision did not reach Boss's Call: $json"
+  pass "a real structured child decision reaches Boss's Call"
 }
 
 make_valid_secondmate_home() {  # <id> <home>
@@ -1161,10 +1161,10 @@ test_live_blocker_is_not_charted_queue_work() {
   pass "Bearings keeps a live blocker in structured live state and never converts it to Charted Next queue work"
 }
 
-# Captain's Call is populated only from the durable keyed open-decision set. The
+# Boss's Call is populated only from the durable keyed open-decision set. The
 # anti-leak guard: action-free highlights - a working task, a completed scout,
 # queued/gated items, landed work - must never surface as an open decision, so they
-# cannot leak into Captain's Call. The standard fixture has exactly one genuine open
+# cannot leak into Boss's Call. The standard fixture has exactly one genuine open
 # decision (the secondmate's masked needs-decision).
 test_captains_call_anti_leak() {
   local home fakebin json canonical
@@ -1182,8 +1182,8 @@ test_captains_call_anti_leak() {
       and ([$bearings.decisions_open[].id] | index("mate-landed") | not)
       and ([$bearings.decisions_open[].id] | index("live-gate") | not)
       and ([$bearings.decisions_open[].id] | index("dead-gate") | not)
-  ' >/dev/null || fail "only genuine open decisions may feed Captain's Call: $json"
-  pass "action-free items (working/done/queued/landed) do not leak into Captain's Call"
+  ' >/dev/null || fail "only genuine open decisions may feed Boss's Call: $json"
+  pass "action-free items (working/done/queued/landed) do not leak into Boss's Call"
 }
 
 # The /bearings skill is the one owner of the four-section chat-response contract.
@@ -1196,13 +1196,13 @@ test_chat_contract_four_sections() {
   [ -f "$skill" ] || fail "bearings SKILL.md missing at $skill"
   body=$(awk '/^## Chat-response contract$/{capture=1; next} capture && /^## /{exit} capture' "$skill")
   headings=$(printf '%s\n' "$body" | sed -nE "s/^[0-9]+\. \*\*([^*]+)\*\*.*/\1/p")
-  expected=$(printf '%s\n' "Captain's Call" "Recently Landed" "Underway" "Charted Next")
+  expected=$(printf '%s\n' "Boss's Call" "Recently Landed" "Underway" "Charted Next")
   [ "$headings" = "$expected" ] || fail "chat contract must contain exactly four numbered sections in fixed order, got: $headings"
-  assert_contains "$body" "Nothing needs your action right now" "Captain's Call empty-state sentence"
+  assert_contains "$body" "Nothing needs your action right now" "Boss's Call empty-state sentence"
   assert_contains "$body" "No recent completions are in the current baseline" "Recently Landed empty-state sentence"
   assert_contains "$body" "Nothing is underway" "Underway empty-state sentence"
   assert_contains "$body" "Nothing is queued" "Charted Next empty-state sentence"
-  report_headings=$(sed -nE 's/^   - \*\*(Captain.s Call|Recently Landed|Underway|Charted Next)\*\*.*/\1/p' "$skill")
+  report_headings=$(sed -nE 's/^   - \*\*(Boss.s Call|Recently Landed|Underway|Charted Next)\*\*.*/\1/p' "$skill")
   [ "$report_headings" = "$expected" ] || fail "detailed report contract must contain the same four complete sections, got: $report_headings"
   grep -Eq 'since the (prior|last) report|Nothing has landed since|unchanged delta' "$skill" \
     && fail "bearings contract still contains prior-report delta wording"

@@ -31,11 +31,11 @@ Before switching or spawning against Orca:
 - Confirm the Orca app is running and the backend readiness checks pass before expecting spawn to work.
 - Inspect active `state/*.meta` records before changing backend selection.
 - Treat a backend switch as affecting future spawns only; existing tasks keep their recorded backend.
-- Reconcile watcher wakes before unrelated work, especially if Orca tasks are already in flight.
+- Reconcile supervisor wakes before unrelated work, especially if Orca tasks are already in flight.
 
 ## Spawn
 
-Use `bin/fm-spawn.sh` so firstmate creates the brief, worktree, terminal, metadata, status file, and watcher surface together.
+Use `bin/fm-spawn.sh` so firstmate creates the task spec, worktree, terminal, metadata, status file, and supervisor surface together.
 Pass `--backend orca` for a one-off Orca task, or rely on the already-selected Orca backend when that selection is intentional.
 
 After spawn, check the task with firstmate helpers:
@@ -52,7 +52,7 @@ Do not manually patch metadata to make an externally-created Orca terminal look 
 
 Use `bin/fm-peek.sh`, `bin/fm-send.sh`, `bin/fm-crew-state.sh`, and `bin/fm-teardown.sh` for routine operation.
 For steer messages, send short lines through `bin/fm-send.sh <id> '...'`; the stable `fm-<id>` alias also works.
-Put long instructions in the task brief or a temporary file and point the crewmate at that file.
+Put long instructions in the task task spec or a temporary file and point the agent at that file.
 
 When supervising, treat `state/<id>.meta` as the routing record and Orca's own ids as backend implementation details.
 The stable firstmate alias is `fm-<id>`.
@@ -74,17 +74,17 @@ For a messy Orca-backed task:
 6. Stop and inspect if the recorded worktree path, Orca worktree id, or project checkout no longer matches expectations.
 
 Teardown remains governed by the normal firstmate landing rules.
-Scout work can be torn down after the report exists.
-Ship work can be torn down only after the work is landed by its project mode.
+Research-task work can be torn down after the report exists.
+Execution-task work can be torn down only after the work is landed by its project mode.
 
 ## Smoke Test
 
 Keep Orca smoke tests focused on lifecycle plumbing:
 
-1. Select Orca intentionally for a disposable task or scout.
+1. Select Orca intentionally for a disposable task or research task.
 2. Spawn through `bin/fm-spawn.sh`.
 3. Confirm metadata records the Orca backend, terminal, Orca worktree id, and isolated worktree path.
-4. Verify `bin/fm-peek.sh`, a short `bin/fm-send.sh` steer, watcher wake behavior, and `bin/fm-crew-state.sh`.
+4. Verify `bin/fm-peek.sh`, a short `bin/fm-send.sh` steer, supervisor wake behavior, and `bin/fm-crew-state.sh`.
 5. Tear down through `bin/fm-teardown.sh` after the task is safely disposable or landed.
 6. Restore the previous backend selection if Orca was selected only for the smoke test.
 

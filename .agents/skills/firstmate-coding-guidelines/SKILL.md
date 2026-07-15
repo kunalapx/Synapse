@@ -2,7 +2,7 @@
 name: firstmate-coding-guidelines
 description: >-
   Agent-only reference for changing firstmate's shared, tracked material per AGENTS.md section 1.
-  Use before editing any of that material, whether working as firstmate directly or as a crewmate briefed on a firstmate-repo task.
+  Use before editing any of that material, whether working as firstmate directly or as an agent briefed on a firstmate-repo task.
   Covers the knowledge-placement decision tree, the one-owner rule for contracts, the inline-stub pattern for content moved into a skill, AGENTS.md size discipline, trigger hygiene for new skills, and repo style rules (one sentence per line, plain dash, no agent co-author, shellcheck-clean bin scripts, colocated tests, and backend-verification evidence).
 user-invocable: false
 metadata:
@@ -52,7 +52,7 @@ The model to copy is `AGENTS.md` section 8's "Away-mode stub": it keeps only the
 
 Apply the decision tree above to every line you are about to add to `AGENTS.md`.
 If an addition needs more than a few lines of conditional detail (detail that matters only in a specific situation) or reference detail (a wire format, an exact schema, historical rationale), you are almost certainly adding it to the wrong file.
-`AGENTS.md`'s token cost is paid by every session of every fleet member, every time, whether or not that session ever hits the situation the new lines describe.
+`AGENTS.md`'s token cost is paid by every session of every agent pool member, every time, whether or not that session ever hits the situation the new lines describe.
 A skill's cost is paid only by the sessions that actually load it.
 When in doubt, write the fact into the skill or doc first, and add only the one-line trigger to `AGENTS.md`.
 
@@ -61,9 +61,9 @@ When in doubt, write the fact into the skill or doc first, and add only the one-
 A new skill is dead weight if nothing loads it.
 Every new skill needs its load trigger declared inline: section 13 for agent-only reference skills, or the relevant operating section for anything else.
 State the trigger as a condition ("load before X", "load on Y wake"), never as a vague pointer.
-Briefs for tasks that touch firstmate's own tracked material should tell the crewmate to load this skill.
+Task specs for tasks that touch firstmate's own tracked material should tell the agent to load this skill.
 `bin/fm-brief.sh`'s `REPO` argument is a caller-supplied string with no reliable signal that it names firstmate's own repo, unlike a project registered in `data/projects.md`, so there is no clean point inside the scaffold to detect this case automatically.
-Firstmate adds this skill's load instruction to firstmate-repo briefs by hand instead.
+Firstmate adds this skill's load instruction to firstmate-repo task specs by hand instead.
 `CONTRIBUTING.md`'s "Development" section carries the same instruction as a durable reminder.
 
 ## Repo style rules
