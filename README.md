@@ -1,4 +1,4 @@
-<h1 align="center">MomentScience Synapse</h1>
+<h1 align="center">Synapse</h1>
 <p align="center">
   <a
     href="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue?style=flat-square"
@@ -39,6 +39,8 @@ An agent distro is a portable directory of instructions, skills, tooling, polici
 There is no app to install: the cloned repo is the distro - `AGENTS.md`, bundled Synapse skills, and helper scripts that any terminal coding agent can follow.
 Launching a supported harness inside it instantiates your Synapse - and makes you the boss.
 
+Synapse began as a fork of [firstmate](https://github.com/kunchenguid/firstmate), built on the same core principle - one agent you talk to, a crew of autonomous agents doing the work - and has since grown into its own independent project with its own direction.
+
 ## Features
 
 - **One liaison** - you talk only to Synapse; it dispatches, supervises, escalates only real decisions, and reports plain outcomes.
@@ -77,8 +79,8 @@ Codex and OpenCode are also verified and supported as primary harnesses; Codex u
 
 ```sh
 gh auth login
-git clone https://github.com/kunchenguid/firstmate
-cd firstmate
+git clone git@github.com:kunalapx/Synapse.git
+cd Synapse
 ```
 
 Then launch one of the co-primary harnesses; AGENTS.md takes over from there:
@@ -196,11 +198,3 @@ Synapse's skills live in two separate places with different audiences:
 - [docs/scripts.md](docs/scripts.md) - the `bin/` toolbelt reference.
 - [`AGENTS.md`](AGENTS.md) - the distro's core instruction file and Synapse's full operating manual.
 - [CONTRIBUTING.md](CONTRIBUTING.md) - how to contribute, including the dev/test commands.
-
-## Contributing
-
-Contributions are welcome - see [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow, repo conventions, and how to run the tests.
-
-## License
-
-MIT - see [LICENSE](LICENSE).
