@@ -28,11 +28,16 @@
 #   without it carry a loud declaration so an omitted contract cannot be silent.
 # For ship tasks, the definition of done is shaped by the project's delivery mode
 # (data/projects.md via fm-project-mode.sh; see AGENTS.md project management
-# and task lifecycle):
-#   no-mistakes  implement -> /no-mistakes pipeline -> PR -> captain merge (default)
-#   direct-PR    implement -> push + open PR via gh-axi (no pipeline) -> captain merge
-#   local-only   implement on branch, stop and report "ready in branch" (no push/PR);
-#                firstmate reviews, captain approves, firstmate merges to local main
+# and task lifecycle). Both modes run the same mandatory pre-PR sequence before
+# it is done: first the project's own build/lint/typecheck commands (from its
+# AGENTS.md, or discovered and recorded there), then /verify-feature when the
+# task carries a tracked ticket reference, then /high-level-review against the
+# diff, fixing what it flags itself.
+#   direct-PR    implement -> build/lint/test -> self-review -> push + open PR
+#                via gh-axi (default) -> captain merge
+#   local-only   implement -> build/lint/test -> self-review on branch, stop
+#                and report "ready in branch" (no push/PR); firstmate reviews,
+#                captain approves, firstmate merges to local main
 # Ship briefs begin with a worktree-isolation assertion before the branch step.
 # Both ship and scout Setup sections then require a fetch + fast-forward-to-origin
 # check before any other work starts, independent of firstmate's own pre-spawn
@@ -113,6 +118,7 @@ STATUS_FILE=$(shell_quote "$STATE/$ID.status")
 # Shared "confirm fresh before starting" step, inserted into both ship and scout
 # Setup sections. A pooled worktree can be older than the primary's last sync,
 # so this is a per-task guarantee independent of firstmate's own pre-spawn sync.
+# shellcheck disable=SC2016 # single quotes are deliberate: literal brief text whose backtick-wrapped $(...) must reach the reading agent verbatim, not expand at scaffold time.
 FRESH_CHECK='**Confirm the default branch is current before doing anything else.** Run `git remote -v`; if a remote is listed, run `git fetch origin` then `git merge --ff-only origin/$(git branch --show-current)` to fast-forward to its real current tip before continuing. If there is no remote (a purely local project), skip this step - there is nothing to sync against. If the fast-forward fails because the local default branch has diverged from origin, STOP and append `blocked: local default branch diverged from origin, needs firstmate attention` to the status file.'
 
 if [ "$KIND" = secondmate ]; then
@@ -263,9 +269,6 @@ $FRESH_CHECK
 6. If a decision belongs to a human (product choices, destructive actions),
    append \`needs-decision: {summary of options}\` and stop. Firstmate will reply with the decision.
    When firstmate replies or a blocker clears and you resume, append \`resolved: {how it was decided or unblocked}\` (add the same \`[key=<slug>]\` if you opened it with one) so the decision or blocker is durably closed and does not keep resurfacing.
-7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
-   every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
-   daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
 
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
@@ -284,51 +287,37 @@ $("$FM_ROOT/bin/fm-project-mode.sh" "$REPO")
 EOF
 
 case "$MODE" in
-  direct-PR)
-    SETUP2=""
-    RULE1='1. Never push to the default branch (push only your `fm/'"$ID"'` branch). Never merge a PR.'
-    DOD=$(cat <<EOF
-# Definition of done
-This project ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
-The task is complete only when committed on your branch.
-When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
-Do NOT run /no-mistakes. The captain reviews and merges the PR; firstmate relays it.
-EOF
-)
-    ;;
   local-only)
     SETUP2=""
     RULE1="1. Never push to any remote and never open a PR. Work only on your \`fm/$ID\` branch; firstmate handles the merge into local \`main\`."
     DOD=$(cat <<EOF
 # Definition of done
-This project ships **local-only**: no remote, no PR, no pipeline.
+This project ships **local-only**: no remote, no PR.
 The task is complete only when committed on your branch \`fm/$ID\`. Do NOT push, do NOT open a PR, do NOT merge.
+1. Build/lint/test check (mandatory, first): find the build, lint, and typecheck commands for this project - in its \`AGENTS.md\` if documented, otherwise discovered from \`package.json\`, \`README\`, or similar and recorded into \`AGENTS.md\` per Project memory above - run them, and confirm they pass.
+2. If the task above references a tracked ticket (a Notion/Dart task or a GitHub Issue), run /verify-feature against it.
+3. Run /high-level-review against your diff vs the base branch, and fix everything it flags under Critical/Architectural/Moderate yourself.
+A decision you cannot make on your own during any of these steps follows rule 6 below.
 Keep your branch a clean fast-forward onto the current default branch - if \`main\` has advanced, rebase onto it so the eventual merge stays a fast-forward.
-When it is implemented and committed, append \`done: ready in branch fm/$ID\` to the status file and stop.
+When all three steps pass and any findings are fixed, append \`done: ready in branch fm/$ID\` to the status file and stop.
 Firstmate then reviews your branch diff, the captain approves, and firstmate merges it into local \`main\`.
 EOF
 )
     ;;
-  *)  # no-mistakes (default)
-    SETUP2="
-2. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`."
-    RULE1='1. Never push to the default branch. Never merge a PR.'
+  *)  # direct-PR (default; fm-project-mode.sh also normalizes a legacy "no-mistakes"
+      # registry entry to this)
+    SETUP2=""
+    RULE1='1. Never push to the default branch (push only your `fm/'"$ID"'` branch). Never merge a PR.'
     DOD=$(cat <<EOF
 # Definition of done
+This project ships **direct-PR**: you review and open the PR yourself.
 The task is complete only when committed on your branch.
-When you believe it is complete, append \`done: {summary}\` to the status file and stop.
-Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
-
-You drive no-mistakes by responding to its gates, not by implementing fixes.
-Follow the guidance no-mistakes itself provides for the mechanics: it loads when you invoke /no-mistakes, and \`no-mistakes axi run --help\` plus the \`help\` lines in each \`axi\` response are authoritative and version-matched to the installed binary.
-Do not hand-edit, commit, or fix findings yourself while a run is active - the pipeline applies every fix.
-
-Two firstmate-specific rules layer on top of that guidance:
-- ask-user findings are not yours to answer: escalate to firstmate (rule 6) and stop.
-  When the decision comes back, feed it to the gate with \`no-mistakes axi respond\` and let the pipeline apply it - do not route the question to "the user" or implement the fix yourself.
-- Avoid \`--yes\`: the captain, not you, owns the ask-user decisions it would silently auto-resolve.
-
-After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
+1. Build/lint/test check (mandatory, first): find the build, lint, and typecheck commands for this project - in its \`AGENTS.md\` if documented, otherwise discovered from \`package.json\`, \`README\`, or similar and recorded into \`AGENTS.md\` per Project memory above - run them, and confirm they pass.
+2. If the task above references a tracked ticket (a Notion/Dart task or a GitHub Issue), run /verify-feature against it.
+3. Run /high-level-review against your diff vs the base branch, and fix everything it flags under Critical/Architectural/Moderate yourself.
+A decision you cannot make on your own during any of these steps follows rule 6 below.
+When all three steps pass and any findings are fixed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
+The captain reviews and merges the PR; firstmate relays it.
 EOF
 )
     ;;
@@ -369,12 +358,10 @@ $RULE1
    a scheduled window): firstmate then leaves your idle pane alone and rechecks it on a long
    cadence instead of treating it as a possible wedge. Use \`blocked:\` when you are stuck and need help.
 5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
-6. If a decision belongs to a human (product choices, destructive actions, ask-user findings),
-   append \`needs-decision: {summary of options}\` and stop. Firstmate will reply with the decision.
+6. If a decision belongs to a human (product choices, destructive actions, or a review
+   finding you cannot resolve on your own), append \`needs-decision: {summary of options}\`
+   and stop. Firstmate will reply with the decision.
    When firstmate replies or a blocker clears and you resume, append \`resolved: {how it was decided or unblocked}\` (add the same \`[key=<slug>]\` if you opened it with one) so the decision or blocker is durably closed and does not keep resurfacing.
-7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
-   every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
-   daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
 
 # Project memory
 If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.

@@ -54,16 +54,15 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
 
 ## Development
 
-Tracked changes to Synapse itself - `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `bin/`, `.agents/skills/`, and `skills/` - ship through the `no-mistakes` pipeline on a feature branch and require an explicit merge approval.
+Tracked changes to Synapse itself - `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `bin/`, `.agents/skills/`, and `skills/` - ship on a feature branch through the same `direct-PR` flow Synapse uses for any project it manages (AGENTS.md section 7) and require an explicit merge approval.
 Before making any such change, load the agent-only `firstmate-coding-guidelines` skill (`.agents/skills/firstmate-coding-guidelines/SKILL.md`).
 It has the knowledge-placement rules that keep `AGENTS.md` from regrowing after each diet pass.
 There is no reliable way for `bin/fm-brief.sh`'s scaffold to detect that a task's repo is Synapse itself, so Synapse adds this skill's load line to Synapse-repo task specs by hand.
 An agent picking up such a task spec should load the skill even if the task spec predates this instruction.
 When supervising live agents, keep Synapse's own long validation or build commands in the background so supervisor wakes can still be handled.
-Agent validation follows the installed no-mistakes version's SKILL.md and live `axi` help instead of duplicating gate mechanics in Synapse docs.
-Synapse's wrapper still matters: `ask-user` findings route to the boss through Synapse, and agents avoid `--yes` because it silently resolves boss-owned decisions without escalation.
-Local `.no-mistakes/` state and test evidence stay out of this repo; `.no-mistakes.yaml` keeps evidence in a temp directory and pins the gate's lint and portable behavior commands to the Linux CI jobs, while `.github/workflows/ci.yml` owns additional platform-specific compatibility lanes.
-That is Synapse-specific; do not commit `.no-mistakes/evidence/` here even when another no-mistakes-managed target project keeps committed PR evidence.
+Agent validation first runs the toolbelt checks below and confirms they pass, then `/verify-feature` when the task carries a tracked ticket reference, then `/high-level-review` against the diff vs the base branch, fixing what it flags itself before pushing and opening the PR (AGENTS.md section 7 "Validate").
+Synapse's wrapper still matters: a genuine product or scope decision the agent cannot resolve on its own routes to the boss through Synapse via `needs-decision:`/`resolved:`, exactly as `ask-user` findings did under the retired no-mistakes gate.
+This tracked-material delivery flow is unrelated to the top-of-file no-mistakes contributor policy: that policy and its CI gate (`.github/workflows/no-mistakes-required.yml`) govern human-authored PRs from external contributors and are unchanged by this section.
 
 Check and test the toolbelt before pushing:
 

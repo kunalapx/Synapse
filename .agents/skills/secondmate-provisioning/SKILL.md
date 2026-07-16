@@ -88,11 +88,10 @@ Direct seed without a preexisting task spec requires `FM_SECONDMATE_CHARTER`.
 Run `bin/fm-home-seed.sh validate` when checking registry integrity; it refuses duplicate ids, duplicate homes, and nested or overlapping homes.
 
 Seeding is transactional.
-If validation, cloning, no-mistakes initialization, or registry update fails, generated task specs, new homes, new project clones, and registry edits are rolled back.
+If validation, cloning, or registry update fails, generated task specs, new homes, new project clones, and registry edits are rolled back.
 
-Domain agent project lists may include `no-mistakes` and `direct-PR` projects only.
+Domain agent project lists may include `direct-PR` projects only.
 `local-only` projects stay with the main Synapse.
-For `no-mistakes` projects, seeding initializes only projects newly cloned into a domain agent home and refuses to mutate a preexisting clone that is not already initialized.
 
 ## Backlog handoff
 

@@ -9,6 +9,12 @@
 # parsing of the *entire rest of the script* - `bash -n` fails, not just the
 # generated brief. A plain `cat > file <<EOF ... EOF` (not wrapped in `$(...)`)
 # is unaffected, so the secondmate charter block does not need this guard.
+#
+# Ship delivery modes are direct-PR (default) and local-only; both self-review
+# via /verify-feature (when ticketed) + /high-level-review before shipping
+# (AGENTS.md section 7 "Validate"). A legacy "no-mistakes" registry entry is
+# normalized to direct-PR by fm-project-mode.sh, so fm-brief.sh itself never
+# sees that mode name.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -17,8 +23,8 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-brief)
 
 # The script itself must always parse. This is the direct regression test for
-# issue #166: a stray apostrophe in any of the three DOD heredoc bodies
-# (no-mistakes/direct-PR/local-only) breaks `bash -n` on the whole file.
+# issue #166: a stray apostrophe in either of the two DOD heredoc bodies
+# (direct-PR/local-only) breaks `bash -n` on the whole file.
 test_script_parses() {
   bash -n "$ROOT/bin/fm-brief.sh" 2>&1 || fail "bin/fm-brief.sh fails bash -n (heredoc/quote regression)"
   pass "fm-brief.sh: bash -n succeeds"
@@ -32,7 +38,7 @@ test_help_includes_entire_header() {
 }
 
 # Registry with one project per delivery mode, so each ship-mode DOD branch is
-# exercised. A project absent from the registry defaults to no-mistakes.
+# exercised. A project absent from the registry defaults to direct-PR.
 write_registry() {
   local home=$1
   mkdir -p "$home/data"
@@ -52,7 +58,7 @@ test_ship_modes_generate_clean_briefs() {
   home="$TMP_ROOT/ship-home"
   write_registry "$home"
 
-  for id_proj in "brief-nomistakes-a1:no-registry-proj" "brief-directpr-a2:direct-proj" "brief-localonly-a3:local-proj"; do
+  for id_proj in "brief-defaultmode-a1:no-registry-proj" "brief-directpr-a2:direct-proj" "brief-localonly-a3:local-proj"; do
     id=${id_proj%%:*}
     proj=${id_proj##*:}
     FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" "$proj" >/dev/null 2>&1; status=$?
@@ -63,24 +69,45 @@ test_ship_modes_generate_clean_briefs() {
     assert_grep "{TASK}" "$brief" "$id: brief missing the {TASK} placeholder"
     assert_no_grep "EOF" "$brief" "$id: brief leaked a heredoc EOF marker (unterminated heredoc)"
   done
-  pass "fm-brief.sh: no-mistakes/direct-PR/local-only briefs generate cleanly"
+  pass "fm-brief.sh: direct-PR/local-only briefs generate cleanly"
 }
 
-# Pin the specific line the bug lived on: the no-mistakes DOD's no-mistakes
-# reference must render as plain prose with no dangling apostrophe artifact.
-test_no_mistakes_dod_wording() {
-  local home id brief
+# The default (direct-PR) and local-only DODs must both carry the full
+# pre-ship contract - mandatory build/lint/test check first, then conditional
+# /verify-feature, then /high-level-review - with no dangling apostrophe
+# artifact (issue #166 regression shape) and no leftover no-mistakes gate
+# mechanics.
+test_self_review_dod_wording() {
+  local home brief
   home="$TMP_ROOT/wording-home"
   mkdir -p "$home/data"
-  id="brief-wording-b1"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj >/dev/null 2>&1
-  brief="$home/data/$id/brief.md"
-  assert_present "$brief" "brief was not scaffolded"
-  assert_grep "no-mistakes itself provides for the mechanics" "$brief" \
-    "no-mistakes DOD lost its guidance-reference sentence"
-  assert_no_grep "no-mistakes' own guidance" "$brief" \
-    "no-mistakes DOD regressed to the apostrophe form that breaks bash -n"
-  pass "fm-brief.sh: no-mistakes DOD wording avoids the apostrophe regression"
+  printf '%s\n' '- local-wording-proj [local-only] - fixture (added 2026-07-01)' > "$home/data/projects.md"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-wording-b1 some-proj >/dev/null 2>&1
+  brief="$home/data/brief-wording-b1/brief.md"
+  assert_present "$brief" "direct-PR brief was not scaffolded"
+  assert_grep "Build/lint/test check (mandatory, first)" "$brief" \
+    "direct-PR DOD lost the mandatory build/lint/test check step"
+  assert_grep "If the task above references a tracked ticket" "$brief" \
+    "direct-PR DOD lost the conditional /verify-feature instruction"
+  assert_grep "Run /high-level-review against your diff vs the base branch" "$brief" \
+    "direct-PR DOD lost the /high-level-review instruction"
+  assert_no_grep "no-mistakes" "$brief" \
+    "direct-PR DOD retained a no-mistakes gate reference"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-wording-b2 local-wording-proj >/dev/null 2>&1
+  brief="$home/data/brief-wording-b2/brief.md"
+  assert_present "$brief" "local-only brief was not scaffolded"
+  assert_grep "Build/lint/test check (mandatory, first)" "$brief" \
+    "local-only DOD lost the mandatory build/lint/test check step"
+  assert_grep "If the task above references a tracked ticket" "$brief" \
+    "local-only DOD lost the conditional /verify-feature instruction"
+  assert_grep "Run /high-level-review against your diff vs the base branch" "$brief" \
+    "local-only DOD lost the /high-level-review instruction"
+  assert_no_grep "no-mistakes" "$brief" \
+    "local-only DOD retained a no-mistakes gate reference"
+
+  pass "fm-brief.sh: direct-PR/local-only DODs carry the full pre-ship contract cleanly"
 }
 
 test_ship_project_memory_wording() {
@@ -269,7 +296,7 @@ test_pause_verb_override_renders_all_brief_scaffolds() {
 test_script_parses
 test_help_includes_entire_header
 test_ship_modes_generate_clean_briefs
-test_no_mistakes_dod_wording
+test_self_review_dod_wording
 test_ship_project_memory_wording
 test_herdr_lab_contract_is_explicit_and_complete
 test_herdr_lab_contract_quotes_foreign_firstmate_path

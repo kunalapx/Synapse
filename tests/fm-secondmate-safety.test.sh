@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # tests/fm-secondmate-safety.test.sh - secondmate home safety invariants:
 # the path-boundary matrices (seed/spawn/teardown), registry/charter/origin
-# validation, treehouse lease handling, no-mistakes initialization of new
-# clones, child-worktree protection, and backlog-handoff safety. The happy-path
-# operator flow lives in fm-secondmate-lifecycle-e2e.test.sh; this file keeps the
-# destructive-invariant coverage that an e2e run cannot deterministically reach.
+# validation, treehouse lease handling, confirmation that seeding never touches
+# the retired no-mistakes mechanism, child-worktree protection, and
+# backlog-handoff safety. The happy-path operator flow lives in
+# fm-secondmate-lifecycle-e2e.test.sh; this file keeps the destructive-invariant
+# coverage that an e2e run cannot deterministically reach.
 set -u
 
 # shellcheck source=tests/secondmate-helpers.sh disable=SC1091
@@ -24,7 +25,7 @@ test_fm_home_parameterization() {
   out=$(FM_HOME="$home_one" "$ROOT/bin/fm-project-mode.sh" app)
   [ "$out" = "local-only on" ] || fail "fm-project-mode did not read projects.md from FM_HOME"
   out=$(FM_HOME="$home_two" "$ROOT/bin/fm-project-mode.sh" app 2>/dev/null)
-  [ "$out" = "no-mistakes off" ] || fail "fm-project-mode did not isolate missing registry by home"
+  [ "$out" = "direct-PR off" ] || fail "fm-project-mode did not isolate missing registry by home"
 
   FM_HOME="$home_one" "$ROOT/bin/fm-brief.sh" task-a app >/dev/null || fail "brief scaffold failed under FM_HOME"
   brief="$home_one/data/task-a/brief.md"
@@ -689,7 +690,7 @@ test_home_seed_refuses_local_only_project() {
   if FM_HOME="$home" "$ROOT/bin/fm-home-seed.sh" design "$subhome" alpha >/dev/null 2>"$err"; then
     fail "seed allowed a local-only project into a secondmate home"
   fi
-  grep -F 'project alpha is local-only; secondmate routes support only no-mistakes and direct-PR projects' "$err" >/dev/null \
+  grep -F 'project alpha is local-only; secondmate routes support only direct-PR projects' "$err" >/dev/null \
     || fail "seed did not explain local-only project rejection"
   [ ! -e "$subhome" ] || fail "seed created a subhome before rejecting a local-only project"
   pass "home seeding refuses local-only projects"
@@ -955,68 +956,32 @@ test_home_seed_resolves_relative_source_origins() {
   pass "home seeding resolves relative source origins against the source project"
 }
 
-test_home_seed_skips_initialized_existing_no_mistakes_projects() {
-  local home subhome err fakebin log origin
-  home="$TMP_ROOT/existing-initialized-home"
-  subhome="$TMP_ROOT/existing-initialized-subhome"
-  err="$TMP_ROOT/existing-initialized.err"
-  log="$TMP_ROOT/existing-initialized-no-mistakes.log"
+# Retired mechanism: seeding never runs no-mistakes against any cloned project,
+# regardless of whether an existing clone already carries a no-mistakes remote,
+# and succeeds with no `no-mistakes` binary on PATH at all.
+test_home_seed_never_touches_no_mistakes_state() {
+  local home subhome origin
+  home="$TMP_ROOT/no-mistakes-retired-home"
+  subhome="$TMP_ROOT/no-mistakes-retired-subhome"
   mkdir -p "$home/projects" "$home/data" "$home/state"
   fm_git_init_commit "$home/projects/alpha"
   fm_git_init_commit "$home/projects/beta"
-  fm_git_add_origin "$home/projects/alpha" "$TMP_ROOT/remotes/existing-alpha.git"
-  fm_git_add_origin "$home/projects/beta" "$TMP_ROOT/remotes/existing-beta.git"
+  fm_git_add_origin "$home/projects/alpha" "$TMP_ROOT/remotes/retired-alpha.git"
+  fm_git_add_origin "$home/projects/beta" "$TMP_ROOT/remotes/retired-beta.git"
   git clone --quiet "$ROOT" "$subhome"
   mkdir -p "$subhome/projects"
   origin=$(git -C "$home/projects/alpha" remote get-url origin)
   git clone --quiet "$origin" "$subhome/projects/alpha"
   git -C "$subhome/projects/alpha" remote add no-mistakes "$TMP_ROOT/no-mistakes-alpha.git"
   printf '%s\n' '- alpha - alpha project (added 2026-06-22)' '- beta - beta project (added 2026-06-22)' > "$home/data/projects.md"
-  fakebin=$(make_recording_no_mistakes "$TMP_ROOT/existing-initialized-fake")
-  : > "$log"
 
-  if PATH="$fakebin:$PATH" FM_FAKE_NO_MISTAKES_LOG="$log" FM_FAKE_NO_MISTAKES_FAIL_PROJECT=beta \
-    FM_HOME="$home" FM_SECONDMATE_CHARTER='existing init rollback scope' FM_SECONDMATE_SCOPE='existing init rollback scope' \
-    "$ROOT/bin/fm-home-seed.sh" design "$subhome" alpha beta >/dev/null 2>"$err"; then
-    fail "seed succeeded even though later no-mistakes initialization failed"
-  fi
-  grep -F 'failed to initialize no-mistakes for beta' "$err" >/dev/null \
-    || fail "seed did not explain later no-mistakes initialization failure"
-  grep -F "$subhome/projects/alpha" "$log" >/dev/null \
-    && fail "seed ran no-mistakes against an initialized existing clone"
-  [ ! -f "$subhome/projects/alpha/.no-mistakes-init" ] || fail "seed mutated initialized existing clone with no-mistakes init"
-  [ ! -f "$subhome/projects/alpha/.no-mistakes-doctor" ] || fail "seed mutated initialized existing clone with no-mistakes doctor"
-  [ ! -e "$subhome/projects/beta" ] || fail "failed seed left a newly cloned project after no-mistakes failure"
-  pass "home seeding skips initialized existing no-mistakes clones"
-}
-
-test_home_seed_refuses_uninitialized_existing_no_mistakes_project() {
-  local home subhome err fakebin log origin
-  home="$TMP_ROOT/existing-uninitialized-home"
-  subhome="$TMP_ROOT/existing-uninitialized-subhome"
-  err="$TMP_ROOT/existing-uninitialized.err"
-  log="$TMP_ROOT/existing-uninitialized-no-mistakes.log"
-  mkdir -p "$home/projects" "$home/data" "$home/state"
-  fm_git_init_commit "$home/projects/alpha"
-  fm_git_add_origin "$home/projects/alpha" "$TMP_ROOT/remotes/uninitialized-alpha.git"
-  git clone --quiet "$ROOT" "$subhome"
-  mkdir -p "$subhome/projects"
-  origin=$(git -C "$home/projects/alpha" remote get-url origin)
-  git clone --quiet "$origin" "$subhome/projects/alpha"
-  printf '%s\n' '- alpha - alpha project (added 2026-06-22)' > "$home/data/projects.md"
-  fakebin=$(make_recording_no_mistakes "$TMP_ROOT/existing-uninitialized-fake")
-  : > "$log"
-
-  if PATH="$fakebin:$PATH" FM_FAKE_NO_MISTAKES_LOG="$log" \
-    FM_HOME="$home" FM_SECONDMATE_CHARTER='existing uninitialized scope' \
-    "$ROOT/bin/fm-home-seed.sh" design "$subhome" alpha >/dev/null 2>"$err"; then
-    fail "seed initialized a preexisting no-mistakes clone"
-  fi
-  grep -F 'refusing to mutate preexisting clone' "$err" >/dev/null \
-    || fail "seed did not explain uninitialized existing no-mistakes clone refusal"
-  [ ! -s "$log" ] || fail "seed ran no-mistakes before refusing an uninitialized existing clone"
-  [ ! -f "$subhome/projects/alpha/.no-mistakes-init" ] || fail "seed mutated uninitialized existing clone"
-  pass "home seeding refuses uninitialized existing no-mistakes clones"
+  FM_HOME="$home" FM_SECONDMATE_CHARTER='no-mistakes retirement scope' FM_SECONDMATE_SCOPE='no-mistakes retirement scope' \
+    "$ROOT/bin/fm-home-seed.sh" design "$subhome" alpha beta >/dev/null \
+    || fail "seed failed with no no-mistakes binary on PATH"
+  [ ! -f "$subhome/projects/alpha/.no-mistakes-init" ] || fail "seed ran no-mistakes init against a preexisting clone"
+  [ ! -f "$subhome/projects/beta/.no-mistakes-init" ] || fail "seed ran no-mistakes init against a newly cloned project"
+  [ ! -f "$subhome/projects/beta/.no-mistakes-doctor" ] || fail "seed ran no-mistakes doctor against a newly cloned project"
+  pass "home seeding never touches no-mistakes state for any clone"
 }
 
 test_home_seed_refuses_project_destinations_outside_subhome() {
@@ -2130,8 +2095,7 @@ test_home_seed_refuses_home_overlapping_registered_home
 test_home_seed_refuses_remote_backed_project_without_origin
 test_home_seed_refuses_existing_remote_backed_project_with_wrong_origin
 test_home_seed_resolves_relative_source_origins
-test_home_seed_skips_initialized_existing_no_mistakes_projects
-test_home_seed_refuses_uninitialized_existing_no_mistakes_project
+test_home_seed_never_touches_no_mistakes_state
 test_home_seed_refuses_project_destinations_outside_subhome
 test_home_seed_refuses_operational_dirs_outside_subhome
 test_home_seed_refuses_symlinked_leaf_files

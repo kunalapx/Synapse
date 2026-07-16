@@ -9,7 +9,7 @@ metadata:
 # updatefirstmate
 
 Self-update Synapse in place.
-Synapse is its own repo, behind the same no-mistakes gate as any project, so new tracked material (`AGENTS.md`, `bin/`, `.agents/skills/`, and public `skills/`) reaches `main` and then sits there until each running Synapse pulls it.
+Synapse is its own repo, shipping its own tracked-material changes like any `direct-PR` project it manages, so new tracked material (`AGENTS.md`, `bin/`, `.agents/skills/`, and public `skills/`) reaches `main` and then sits there until each running Synapse pulls it.
 Only `AGENTS.md`, `bin/`, and `.agents/skills/` are a running Synapse instruction surface; public `skills/` is installer-facing and is not loaded by Synapse.
 This skill performs that pull for the running main Synapse and every domain agent, without disturbing any in-flight work.
 
