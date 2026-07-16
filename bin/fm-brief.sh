@@ -286,6 +286,15 @@ read -r MODE _ <<EOF
 $("$FM_ROOT/bin/fm-project-mode.sh" "$REPO")
 EOF
 
+# Shared self-review sequence for both ship delivery modes: a mandatory
+# build/lint/test check first, then conditional /verify-feature, then
+# /high-level-review (AGENTS.md section 7 "Validate").
+# shellcheck disable=SC2016 # single quotes are deliberate: literal brief text whose backticks must reach the reading agent verbatim, not expand at scaffold time.
+SELF_REVIEW_STEPS='1. Build/lint/test check (mandatory, first): find the build, lint, and typecheck commands for this project - in its `AGENTS.md` if documented, otherwise discovered from `package.json`, `README`, or similar and recorded into `AGENTS.md` per Project memory above - run them, and confirm they pass.
+2. If the task above references a tracked ticket (a Notion/Dart task or a GitHub Issue), run /verify-feature against it.
+3. Run /high-level-review against your diff vs the base branch, and fix everything it flags under Critical/Architectural/Moderate yourself.
+A decision you cannot make on your own during any of these steps follows rule 6 below.'
+
 case "$MODE" in
   local-only)
     SETUP2=""
@@ -294,10 +303,7 @@ case "$MODE" in
 # Definition of done
 This project ships **local-only**: no remote, no PR.
 The task is complete only when committed on your branch \`fm/$ID\`. Do NOT push, do NOT open a PR, do NOT merge.
-1. Build/lint/test check (mandatory, first): find the build, lint, and typecheck commands for this project - in its \`AGENTS.md\` if documented, otherwise discovered from \`package.json\`, \`README\`, or similar and recorded into \`AGENTS.md\` per Project memory above - run them, and confirm they pass.
-2. If the task above references a tracked ticket (a Notion/Dart task or a GitHub Issue), run /verify-feature against it.
-3. Run /high-level-review against your diff vs the base branch, and fix everything it flags under Critical/Architectural/Moderate yourself.
-A decision you cannot make on your own during any of these steps follows rule 6 below.
+$SELF_REVIEW_STEPS
 Keep your branch a clean fast-forward onto the current default branch - if \`main\` has advanced, rebase onto it so the eventual merge stays a fast-forward.
 When all three steps pass and any findings are fixed, append \`done: ready in branch fm/$ID\` to the status file and stop.
 Firstmate then reviews your branch diff, the captain approves, and firstmate merges it into local \`main\`.
@@ -312,10 +318,7 @@ EOF
 # Definition of done
 This project ships **direct-PR**: you review and open the PR yourself.
 The task is complete only when committed on your branch.
-1. Build/lint/test check (mandatory, first): find the build, lint, and typecheck commands for this project - in its \`AGENTS.md\` if documented, otherwise discovered from \`package.json\`, \`README\`, or similar and recorded into \`AGENTS.md\` per Project memory above - run them, and confirm they pass.
-2. If the task above references a tracked ticket (a Notion/Dart task or a GitHub Issue), run /verify-feature against it.
-3. Run /high-level-review against your diff vs the base branch, and fix everything it flags under Critical/Architectural/Moderate yourself.
-A decision you cannot make on your own during any of these steps follows rule 6 below.
+$SELF_REVIEW_STEPS
 When all three steps pass and any findings are fixed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
 The captain reviews and merges the PR; firstmate relays it.
 EOF
