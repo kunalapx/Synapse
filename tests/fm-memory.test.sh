@@ -143,4 +143,64 @@ mem propose --id id1 --type project --class repo_fact --scope fleet --body "attr
   || fail "the entry must record the resolved proposer identity"
 pass "identity resolves from config/identity and is recorded on the entry"
 
+# --- retire: remove trust from a single active entry -----------------------
+HOME_DIR=$(new_home)
+mem propose --id ret --type project --class repo_fact --scope fleet --body "bin/old.sh exists." >/dev/null
+mem confirm --id ret --gate deterministic_recheck >/dev/null
+mem promote --id ret >/dev/null || fail "setup: entry must promote before it can be retired"
+[ "$(field ret status)" = active ] || fail "setup: entry must be active before retire"
+grep -q 'entries/ret.md' "$HOME_DIR/data/memory/MEMORY.md" || fail "setup: active entry must be indexed"
+
+out=$(mem retire ret --reason "moved to captain.md" 2>&1); rc=$?
+expect_code 0 "$rc" "retiring an active entry must succeed"
+[ "$(field ret status)" = retired ] || fail "retire must set status: retired"
+[ "$(field ret retire_reason)" = "moved to captain.md" ] || fail "retire must record the reason in frontmatter"
+[ "$(field ret retired_by)" = "human:tester@example.invalid" ] || fail "retire must record the retire attribution"
+[ -n "$(field ret retired_at)" ] || fail "retire must record a retired_at date"
+assert_present "$(entry ret)" "retire must preserve the entry file for audit, not hard-delete it"
+recall_out=$(mem recall 2>&1)
+assert_not_contains "$recall_out" "ret " "recall must not return a retired entry"
+assert_no_grep 'entries/ret.md' "$HOME_DIR/data/memory/MEMORY.md" "MEMORY.md must not list a retired entry"
+pass "retire removes an active entry from recall/index while preserving it for audit"
+
+# --- retire is idempotent: a second retire of the same id is a clean no-op --
+out=$(mem retire ret 2>&1); rc=$?
+expect_code 0 "$rc" "retiring an already-retired entry must succeed as a no-op"
+assert_contains "$out" "already retired" "a repeat retire must say the entry is already retired"
+[ "$(field ret retire_reason)" = "moved to captain.md" ] || fail "a no-op retire must not clobber the original reason"
+pass "retire is idempotent: retiring the same id twice is a clean no-op"
+
+# --- retire errors cleanly on an unknown id --------------------------------
+out=$(mem retire does-not-exist 2>&1); rc=$?
+expect_code 2 "$rc" "retiring an unknown id must fail non-zero (matches the engine's no-such-entry code)"
+assert_contains "$out" "no such entry" "retire must explain the unknown id"
+
+# an explicit id is required (no wildcard mass-retire)
+out=$(mem retire 2>&1); rc=$?
+expect_code 2 "$rc" "retire without an id must be rejected"
+out=$(mem retire a b 2>&1); rc=$?
+expect_code 2 "$rc" "retire refuses more than one id (no wildcard mass-retire)"
+assert_contains "$out" "no wildcard mass-retire" "retire must explain the single-id requirement"
+pass "retire requires exactly one known id and errors cleanly otherwise"
+
+# --- retire disturbs only the named entry ----------------------------------
+HOME_DIR=$(new_home)
+mem propose --id keep1 --type project --class repo_fact --scope fleet --body "keep one." >/dev/null
+mem confirm --id keep1 --gate deterministic_recheck >/dev/null
+mem promote --id keep1 >/dev/null
+mem propose --id keep2 --type project --class repo_fact --scope fleet --body "keep two." >/dev/null
+mem confirm --id keep2 --gate deterministic_recheck >/dev/null
+mem promote --id keep2 >/dev/null
+mem propose --id drop --type project --class repo_fact --scope fleet --body "drop this." >/dev/null
+mem confirm --id drop --gate deterministic_recheck >/dev/null
+mem promote --id drop >/dev/null
+
+mem retire drop >/dev/null || fail "retiring one of several actives must succeed"
+[ "$(field keep1 status)" = active ] || fail "retire must not disturb another active entry"
+[ "$(field keep2 status)" = active ] || fail "retire must not disturb another active entry"
+grep -q 'entries/keep1.md' "$HOME_DIR/data/memory/MEMORY.md" || fail "the index must still list the surviving actives"
+grep -q 'entries/keep2.md' "$HOME_DIR/data/memory/MEMORY.md" || fail "the index must still list the surviving actives"
+assert_no_grep 'entries/drop.md' "$HOME_DIR/data/memory/MEMORY.md" "the retired entry must be dropped from the index"
+pass "retire acts only on the named entry, leaving other actives indexed"
+
 printf 'all fm-memory tests passed\n'
