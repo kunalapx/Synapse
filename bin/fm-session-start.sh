@@ -261,6 +261,16 @@ print_file_or_absent "$DATA/secondmates.md" "data/secondmates.md"
 print_file_or_absent "$DATA/captain.md" "data/captain.md"
 print_file_or_absent "$DATA/learnings.md" "data/learnings.md"
 
+# Active governed memory (bin/fm-memory.sh): a metadata-only summary of the
+# ACTIVE entries so this session knows what institutional memory exists before
+# planning. Only the recall table (id/type/class/scope/title) is shown, never
+# entry bodies or frontmatter, so nothing sensitive is dumped here; read a
+# specific entry from data/memory/entries/<id>.md only when a fact is actually
+# needed. An absent or empty store prints fm-memory.sh's own "(no memory)"
+# marker - meaningful, never an error.
+subsection "active memory (data/memory, active entries only)"
+"$SCRIPT_DIR/fm-memory.sh" recall 2>/dev/null || printf '(no memory)\n'
+
 # --- 5. fleet-state digest ---------------------------------------------
 section "FLEET STATE"
 print_file_or_absent "$DATA/backlog.md" "data/backlog.md"
