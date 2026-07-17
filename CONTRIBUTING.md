@@ -1,34 +1,17 @@
 # Contributing
 
 Thanks for wanting to contribute.
-One rule up front:
-
-**Human-authored pull requests targeting `main` must be raised through [`no-mistakes`](https://github.com/kunchenguid/no-mistakes).**
-We require this to reduce the maintainer's burden of reviewing and merging contributions.
-
-`no-mistakes` puts a local git proxy in front of your real remote.
-Pushing through it runs an AI-driven review/test/lint pipeline in an isolated worktree, forwards the push upstream only after every check passes, and opens a clean PR automatically.
-
-A GitHub Actions check (`Require no-mistakes`) runs on PRs targeting `main` and fails if the body is missing the deterministic signature that no-mistakes writes.
-Dependency bots are exempt so their automation keeps working, but regular contributor PRs without the signature will not be reviewed or merged.
+This repo is a personal fork of firstmate, and changes ship as ordinary pull requests to `main`.
 
 ## Workflow
 
-1. Fork the repo, then clone the parent repo or set your local `origin` back to the parent (`git@github.com:kunchenguid/firstmate.git`).
-2. Create a branch and make your changes.
-3. Initialize the gate with your fork as the push target: `no-mistakes init --fork-url git@github.com:<you>/firstmate.git` (Synapse expects **no-mistakes v1.31.2+**; without a fork, plain `no-mistakes init` still works for maintainers with push access).
-4. Commit your changes.
-5. Push through the gate instead of pushing to `origin`:
-
-   ```sh
-   git push no-mistakes
-   ```
-
-6. Run `no-mistakes` to attach to the pipeline, watch findings, authorize auto-fixes, and review ask-user findings as needed.
-   Follow the installed no-mistakes version's SKILL.md and live `axi` help for gate mechanics.
-7. Once the pipeline passes, it pushes the branch to your fork and opens the PR against the parent repo for you.
-
-See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/start-here/quick-start/) for the full first-run walkthrough.
+1. Fork the repo and clone it, or clone this repo directly if you already have push access.
+2. Create a branch off `main` and make your changes.
+3. Self-review before you push: run the repo's checks (see "Development" below), and for substantive changes run the `high-level-review` skill against your diff and fix what it flags.
+4. Commit your changes and push your branch.
+5. Open a pull request against `main` with `gh-axi`.
+6. `ci.yml` runs the ShellCheck lint and the behavior tests on your PR; keep pushing fixes until both jobs are green.
+7. The maintainer reviews the PR and merges it.
 
 ## Repo conventions
 
@@ -44,7 +27,7 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
 - Helper scripts in `bin/` are plain bash.
   Each starts with a usage header comment; keep it accurate when you change behavior.
   Test scripts and helpers in `tests/` are plain bash too.
-  `bin/fm-lint.sh` must pass: it is the single owner of the lint definition (the shellcheck file set, config, and pinned shellcheck version), and both CI and the no-mistakes pre-push gate run it, so local and CI can never diverge.
+  `bin/fm-lint.sh` must pass: it is the single owner of the lint definition (the shellcheck file set, config, and pinned shellcheck version), and CI runs it, so local and CI can never diverge.
   It pins one exact shellcheck version and refuses to run under any other; print it with `bin/fm-lint.sh --required-version` and install that build locally.
 - Changes to harness adapters (detection in `bin/fm-harness.sh`, launch and hook mechanics in `bin/fm-spawn.sh`, busy signatures in `bin/fm-watch.sh` and `bin/fm-tmux-lib.sh`, cleanup in `bin/fm-teardown.sh`, and facts in `.agents/skills/harness-adapters/SKILL.md`) must be verified empirically against the real harness, never written from documentation alone.
 - Changes to runtime session backends (`bin/fm-backend.sh`, `bin/backends/`, and the scripts that dispatch through them) need empirical adapter notes in the relevant backend guide: `docs/tmux-backend.md`, `docs/herdr-backend.md`, `docs/zellij-backend.md`, `docs/orca-backend.md`, `docs/cmux-backend.md`, or `docs/codex-app-backend.md` for blocked Codex App transport work.
@@ -62,14 +45,14 @@ An agent picking up such a task spec should load the skill even if the task spec
 When supervising live agents, keep Synapse's own long validation or build commands in the background so supervisor wakes can still be handled.
 Agent validation first runs the toolbelt checks below and confirms they pass, then `/verify-feature` when the task carries a tracked ticket reference, then `/high-level-review` against the diff vs the base branch, fixing what it flags itself before pushing and opening the PR (AGENTS.md section 7 "Validate").
 Synapse's wrapper still matters: a genuine product or scope decision the agent cannot resolve on its own routes to the boss through Synapse via `needs-decision:`/`resolved:`, exactly as `ask-user` findings did under the retired no-mistakes gate.
-This tracked-material delivery flow is unrelated to the top-of-file no-mistakes contributor policy: that policy and its CI gate (`.github/workflows/no-mistakes-required.yml`) govern human-authored PRs from external contributors and are unchanged by this section.
+Every PR to `main`, whether opened by Synapse or by a human, is validated by `ci.yml` (the ShellCheck lint and behavior-test jobs); the maintainer merges once it is green.
 
 Check and test the toolbelt before pushing:
 
 ```sh
 for script in bin/*.sh bin/backends/*.sh; do bash -n "$script"; done   # syntax-check the toolbelt
-bin/fm-lint.sh   # lint the toolbelt and behavior tests; the single owner CI and the no-mistakes gate both run
-for test_script in tests/*.test.sh; do bash "$test_script"; done   # behavior tests, matching CI and no-mistakes commands.test
+bin/fm-lint.sh   # lint the toolbelt and behavior tests; the single owner CI runs it too
+for test_script in tests/*.test.sh; do bash "$test_script"; done   # behavior tests, matching CI
 [ "$(readlink CLAUDE.md)" = "AGENTS.md" ]
 [ "$(readlink .claude/skills)" = "../.agents/skills" ]
 tmp=$(mktemp -d) && printf 'done: smoke\n' > "$tmp/smoke.status" && FM_STATE_OVERRIDE="$tmp" FM_SIGNAL_GRACE=1 FM_POLL=1 FM_HEARTBEAT=999999 bin/fm-watch-arm.sh  # supervisor re-arm smoke test (prints arm status, then an actionable signal)

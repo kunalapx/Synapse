@@ -54,8 +54,11 @@ jobs:
           tasks-axi --version
       - run: |
           set -eu
+          # Invoke via `bash` so the suite runs regardless of each file's
+          # executable bit: files committed from a DrvFs/core.filemode=false
+          # checkout can land as 100644 and would otherwise die with exit 126.
           for test_script in tests/*.test.sh; do
-            "$test_script"
+            bash "$test_script"
           done
 
   macos-stock-bash:
