@@ -29,9 +29,21 @@ The goal is a session that is safe to reset or destroy because everything durabl
 
 3. **Write within Synapse's existing write boundaries.**
    This skill does not grant any new write permission; it only prompts Synapse to use the boundaries that already exist (AGENTS.md section 1):
-   - Boss preferences and agent-pool-local operational facts: hand-write directly, to `data/captain.md` and `data/learnings.md` respectively, using inspect-then-update every time.
+   - Boss preferences and working style: hand-write directly to `data/captain.md`, using inspect-then-update every time.
      Before writing, inspect the destination, find the existing bullet or section the finding duplicates or supersedes, and rewrite it in place rather than adding a new trailing entry.
-     `data/learnings.md` may not exist yet; create it on first learning, in the same dated, evidence-backed, curated style as `data/captain.md`.
+     Boss preferences are the one class that stays a flat hand-written file; they are never proposed into the governed memory store, so this fact lives in exactly one home.
+   - Fleet learnings, gotchas, conventions, repo facts, architecture decisions, and business facts: propose each to the governed memory store with `bin/fm-memory.sh propose` as a CANDIDATE, carrying evidence and attribution.
+     Do NOT hand-append these to `data/learnings.md`; that file is retired as a write target (the session digest already surfaces the store's active entries), so `/stow` never writes to it.
+     `propose` can only ever write `status: candidate`; promotion behind the class gate is a separate governed step that `/stow` does not perform, so no `/stow` write can reach trusted `active` memory.
+     Compose each proposal like this, choosing the axes from the fact:
+     - `--id <kebab-slug>` a short descriptive slug for the fact.
+     - `--class <repo_fact|convention|architecture_decision|business_knowledge>` the validation class matching the fact: a learning or gotcha or plain repo fact is `repo_fact`, a code/style convention is `convention`, a standing design decision is `architecture_decision`, a business fact is `business_knowledge`.
+       Never propose `preference` (boss preferences go to `data/captain.md` above) and never propose `security_rule` (it is deliberately un-proposable - escalate a security-relevant fact to the boss instead).
+     - `--type <user|feedback|project|reference>` the recall taxonomy; most fleet facts are `project`, a pointer to an external resource is `reference`.
+     - `--scope <fleet|PROJECT-NAME>` use `fleet` for fleet-wide facts, or the project name when the fact is scoped to one project so `bin/fm-brief.sh` injects it into that project's briefs.
+     - `--source-task <id>` and `--source-agent <name>` for attribution when the finding came from a specific task or agent (the proposer identity is recorded automatically).
+     - `--body "<the fact>. Evidence: <the file, command output, or repro that proves it>."` state the fact, then a short evidence line; never paste raw secrets - the store's secret scan will refuse the write.
+     Before proposing, `bin/fm-memory.sh recall --scope <scope>` first: if an active entry already covers the fact, skip it, and if the finding supersedes an existing active entry, propose a new-version slug (e.g. `<slug>-v2`) which the store opens as a governed conflict rather than a silent duplicate.
    - Project-intrinsic knowledge: never hand-write a project's `AGENTS.md`.
      Route it through a normal execution task so an agent records it via `bin/fm-ensure-agents-md.sh` and commits it through that project's delivery pipeline, exactly as section 6 describes.
      If the agent pool is live, delegate this to an agent rather than doing it inline.
@@ -45,11 +57,12 @@ The goal is a session that is safe to reset or destroy because everything durabl
 4. **Curate with inspect-then-update.**
    Every write starts by reading the current destination and deciding how the finding changes what is already there.
    Use this checklist before writing:
-   - Which existing bullet, section, or task body does this supersede?
+   - Which existing bullet, section, task body, or active memory entry does this supersede?
    - Can this be a one-sentence rewrite instead of a new entry?
    - Should an older bullet or note be deleted, retired, or archived because it is now obsolete?
-   When a finding overlaps or supersedes something already on disk, rewrite or prune the existing entry instead of piling on a new one.
-   Graduation moves are limited to exactly three: promote a learning to the shared `AGENTS.md` via PR, fold it into `data/captain.md`, or delete a stale entry.
+   For a flat hand-written destination (`data/captain.md`, a task body), rewrite or prune the existing entry in place instead of piling on a new one.
+   For the governed store, `recall` first and let the store's own governance handle overlap: a superseding fact becomes a new-version candidate that the store opens as a conflict, never a hand-edit of an existing entry.
+   Graduation moves are limited to exactly four: propose a fleet-knowledge fact to the governed store as a candidate, fold a boss preference into `data/captain.md`, promote a generalizable learning to the shared `AGENTS.md` via PR, or delete/retire a stale flat-file entry.
    Do not invent other graduation paths.
 
 5. **Report to the boss.**
