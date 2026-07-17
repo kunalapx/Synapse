@@ -22,6 +22,31 @@ set -u
 
 TMP_ROOT=$(fm_test_tmproot fm-brief)
 
+MEM="$ROOT/bin/fm-memory.sh"
+
+# seed_memory_home <home>: install the identity + proposer registry the governed
+# memory service needs, allowing the repo_fact class (its deterministic_recheck
+# gate needs only a single confirm, so it is the cheapest class to promote in a
+# test). Mirrors tests/fm-memory.test.sh's fixture so nothing touches the real
+# data/memory/.
+seed_memory_home() {
+  local home=$1
+  mkdir -p "$home/config"
+  printf 'human:tester@example.invalid\n' > "$home/config/identity"
+  cat > "$home/config/memory-proposers.json" <<'JSON'
+[{"proposer_identity":"human:tester@example.invalid","kind":"explicit_action","allowed_classes":["repo_fact"]}]
+JSON
+}
+
+# promote_active_entry <home> <id> <scope> <body>: propose, confirm, and promote
+# one repo_fact entry to active in <home>'s store.
+promote_active_entry() {
+  local home=$1 id=$2 scope=$3 body=$4
+  FM_HOME="$home" bash "$MEM" propose --id "$id" --type project --class repo_fact --scope "$scope" --body "$body" >/dev/null
+  FM_HOME="$home" bash "$MEM" confirm --id "$id" --gate deterministic_recheck >/dev/null
+  FM_HOME="$home" bash "$MEM" promote --id "$id" >/dev/null
+}
+
 # The script itself must always parse. This is the direct regression test for
 # issue #166: a stray apostrophe in either of the two DOD heredoc bodies
 # (direct-PR/local-only) breaks `bash -n` on the whole file.
@@ -293,6 +318,93 @@ test_pause_verb_override_renders_all_brief_scaffolds() {
   pass "fm-brief.sh: custom pause verb renders in every scaffold"
 }
 
+# Scoped active memory is injected under the delimited "## Relevant project
+# memory" heading of both ship and scout briefs, and only entries whose scope
+# matches the resolved project appear.
+test_memory_injection_matches_are_scoped() {
+  local home brief
+  home="$TMP_ROOT/mem-match-home"
+  mkdir -p "$home/data"
+  seed_memory_home "$home"
+  promote_active_entry "$home" build-cmd memproj "Build with make all; the fast path is in AGENTS.md."
+  promote_active_entry "$home" test-runner memproj "Tests run via bash under tests/."
+  promote_active_entry "$home" other-scope otherproj "OTHER-SCOPE-ONLY-FACT should never leak."
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" mem-ship memproj >/dev/null 2>&1
+  brief="$home/data/mem-ship/brief.md"
+  assert_present "$brief" "ship brief not scaffolded"
+  assert_grep "## Relevant project memory" "$brief" "ship brief missing the memory heading for a matching scope"
+  assert_grep "Build with make all" "$brief" "ship brief did not inject a matching active fact"
+  assert_grep "Tests run via bash under tests/." "$brief" "ship brief did not inject the second matching active fact"
+  assert_no_grep "OTHER-SCOPE-ONLY-FACT" "$brief" "ship brief leaked an out-of-scope memory entry"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" mem-scout memproj --scout >/dev/null 2>&1
+  brief="$home/data/mem-scout/brief.md"
+  assert_present "$brief" "scout brief not scaffolded"
+  assert_grep "## Relevant project memory" "$brief" "scout brief missing the memory heading for a matching scope"
+  assert_grep "Build with make all" "$brief" "scout brief did not inject a matching active fact"
+  assert_no_grep "OTHER-SCOPE-ONLY-FACT" "$brief" "scout brief leaked an out-of-scope memory entry"
+
+  pass "fm-brief.sh: ship and scout briefs inject scoped active memory under the delimited heading"
+}
+
+# A scope with no matching active entry injects nothing at all: no empty heading,
+# no noise - whether the store has only out-of-scope entries or does not exist.
+test_memory_injection_no_match_is_silent() {
+  local home brief home2 brief2
+  home="$TMP_ROOT/mem-nomatch-home"
+  mkdir -p "$home/data"
+  seed_memory_home "$home"
+  promote_active_entry "$home" elsewhere someotherproj "Only relevant to another project."
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" mem-empty targetproj >/dev/null 2>&1
+  brief="$home/data/mem-empty/brief.md"
+  assert_present "$brief" "brief not scaffolded"
+  assert_no_grep "## Relevant project memory" "$brief" "brief injected an empty memory heading when nothing matched the scope"
+  assert_no_grep "Only relevant to another project" "$brief" "brief leaked an out-of-scope entry"
+
+  home2="$TMP_ROOT/mem-nostore-home"
+  mkdir -p "$home2/data"
+  FM_HOME="$home2" "$ROOT/bin/fm-brief.sh" mem-nostore anyproj >/dev/null 2>&1
+  brief2="$home2/data/mem-nostore/brief.md"
+  assert_present "$brief2" "no-store brief not scaffolded"
+  assert_no_grep "## Relevant project memory" "$brief2" "brief injected a memory heading with no store present"
+
+  pass "fm-brief.sh: a scope with no matching active memory injects nothing (no heading, no noise)"
+}
+
+# The injection is hard-capped: when the scoped active entries exceed the
+# character budget, the block truncates on whole entries and says so, rather
+# than blowing the crewmate's context.
+test_memory_injection_respects_cap() {
+  local home brief block_chars n big
+  home="$TMP_ROOT/mem-cap-home"
+  mkdir -p "$home/data"
+  seed_memory_home "$home"
+  # Distinct fact families (a numeric-only suffix would collapse to one family
+  # and open conflicts instead of promoting), each large enough that they
+  # cannot all fit under the ~2000-char budget.
+  big=$(printf 'x%.0s' $(seq 1 700))
+  for n in alpha bravo charlie delta echo foxtrot; do
+    promote_active_entry "$home" "cap-$n" capproj "marker-$n $big"
+  done
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" mem-cap capproj >/dev/null 2>&1
+  brief="$home/data/mem-cap/brief.md"
+  assert_present "$brief" "cap brief not scaffolded"
+  assert_grep "## Relevant project memory" "$brief" "cap brief lost the memory heading"
+  assert_grep "Truncated to fit the memory injection budget" "$brief" "cap brief did not flag truncation when entries exceeded the budget"
+  assert_grep "marker-alpha" "$brief" "cap brief dropped even the first entry"
+  assert_no_grep "marker-foxtrot" "$brief" "cap brief injected past the budget instead of truncating"
+
+  # The injected block itself stays bounded: all six entries (~4300 chars) never
+  # fit, so a block well under that proves the cap actually stopped injection.
+  block_chars=$(awk '/^## Relevant project memory$/{f=1} /^# Herdr/{f=0} f' "$brief" | wc -c)
+  [ "$block_chars" -le 2500 ] || fail "injected memory block exceeded the budget ($block_chars chars)"
+
+  pass "fm-brief.sh: memory injection stops at the size cap and flags the truncation"
+}
+
 test_script_parses
 test_help_includes_entire_header
 test_ship_modes_generate_clean_briefs
@@ -304,3 +416,6 @@ test_herdr_lab_omission_is_loud_for_ship_and_scout
 test_herdr_lab_contract_applies_to_scouts_but_not_secondmates
 test_secondmate_no_projects_charter
 test_pause_verb_override_renders_all_brief_scaffolds
+test_memory_injection_matches_are_scoped
+test_memory_injection_no_match_is_silent
+test_memory_injection_respects_cap

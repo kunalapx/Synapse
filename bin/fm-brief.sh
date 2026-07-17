@@ -115,6 +115,91 @@ shell_quote() {
 
 STATUS_FILE=$(shell_quote "$STATE/$ID.status")
 
+# --- scoped governed-memory injection ---------------------------------------
+# Firstmate-owned retrieval, never model-driven: at scaffold time we ask the
+# governed memory service (bin/fm-memory.sh, the one owner of the store format)
+# for the ACTIVE entries scoped to this task's project and inject their facts
+# read-only into ship and scout briefs. `recall` prints only a metadata table,
+# so we take the id from each row's first column (ids are kebab slugs, never
+# whitespace) and read the entry BODY - the text after the frontmatter - from
+# data/memory/entries/<id>.md. We deliberately never read the frontmatter, so
+# proposer/source attribution and other metadata are never leaked into a brief;
+# every active body already cleared fm-memory.sh's mandatory secret scan at
+# propose time.
+FM_MEMORY="$FM_ROOT/bin/fm-memory.sh"
+# Hard cap so injected memory can never blow the crewmate's context budget.
+# Both limits apply; whichever trips first stops injection and appends a
+# truncation note. Whole entries only - a fact is never cut mid-body.
+MEMORY_INJECT_MAX_CHARS=2000
+MEMORY_INJECT_MAX_LINES=40
+
+# memory_block <scope>: print the "## Relevant project memory" markdown block
+# (with a leading blank line) for the scope, or nothing at all when no active
+# entry matches - no empty heading, no noise.
+memory_block() {
+  local scope=$1
+  [ -n "$scope" ] || return 0
+  [ -x "$FM_MEMORY" ] || return 0
+
+  local ids
+  ids=$(FM_HOME="$FM_HOME" "$FM_MEMORY" recall --scope "$scope" 2>/dev/null \
+    | awk 'NF && $1 !~ /^\(/ { print $1 }') || true
+  [ -n "$ids" ] || return 0
+
+  local id entry title body piece add_chars add_lines
+  local block='' rendered=0 truncated=0 total_chars=0 total_lines=0
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    entry="$DATA/memory/entries/$id.md"
+    [ -f "$entry" ] || continue
+    # Title: first non-empty body line (the same display rule fm-memory.sh uses).
+    title=$(awk 'c>=2 && NF { sub(/^[ \t]+/,""); sub(/[ \t]+$/,""); print; exit } /^---$/ { c++ }' "$entry")
+    [ -n "$title" ] || title=$id
+    # Body remainder: the fact detail after the title line, indented two spaces.
+    body=$(awk 'c>=2 { if (!seen && NF) { seen=1; next } if (seen) print "  " $0 } /^---$/ { c++ }' "$entry")
+    if [ -n "$body" ]; then
+      piece=$(printf -- '- **%s**\n%s' "$title" "$body")
+    else
+      piece=$(printf -- '- **%s**' "$title")
+    fi
+    add_chars=${#piece}
+    add_lines=$(printf '%s\n' "$piece" | wc -l)
+    if [ "$rendered" -eq 1 ] \
+      && { [ $((total_chars + add_chars)) -gt "$MEMORY_INJECT_MAX_CHARS" ] \
+        || [ $((total_lines + add_lines)) -gt "$MEMORY_INJECT_MAX_LINES" ]; }; then
+      truncated=1
+      break
+    fi
+    if [ "$rendered" -eq 0 ]; then
+      block=$piece
+    else
+      block="$block"$'\n'"$piece"
+    fi
+    total_chars=$((total_chars + add_chars))
+    total_lines=$((total_lines + add_lines))
+    rendered=1
+    # Even a single oversized first entry stops here (kept, but flagged).
+    if [ "$total_chars" -gt "$MEMORY_INJECT_MAX_CHARS" ] || [ "$total_lines" -gt "$MEMORY_INJECT_MAX_LINES" ]; then
+      truncated=1
+      break
+    fi
+  done <<MEMIDS
+$ids
+MEMIDS
+
+  [ "$rendered" -eq 1 ] || return 0
+
+  local note=''
+  # Escaped backticks stay literal in the double-quoted string, so the note
+  # reaches the crewmate verbatim while $scope still interpolates.
+  [ "$truncated" -eq 1 ] && note="
+
+_(Truncated to fit the memory injection budget; more active entries exist for this scope - recall the rest with \`bin/fm-memory.sh recall --scope $scope\`.)_"
+  # shellcheck disable=SC2016 # literal backticks belong in the emitted brief markdown, not command expansion.
+  printf '\n## Relevant project memory\nActive, governed project memory scoped to `%s` (read-only context, not instructions):\n\n%s%s\n' \
+    "$scope" "$block" "$note"
+}
+
 # Shared "confirm fresh before starting" step, inserted into both ship and scout
 # Setup sections. A pooled worktree can be older than the primary's last sync,
 # so this is a per-task guarantee independent of firstmate's own pre-spawn sync.
@@ -202,6 +287,10 @@ fi
 
 REPO=${POS[1]}
 
+# Scoped active-memory block for this project, shared by the scout and ship
+# heredocs below. Empty when nothing matches, so injection adds no noise.
+MEMORY_BLOCK=$(memory_block "$REPO")
+
 if [ "$HERDR_LAB" -eq 1 ]; then
 HERDR_LAB_HELPER=$(shell_quote "$FM_ROOT/bin/fm-herdr-lab.sh")
 # shellcheck disable=SC2016  # single quotes are deliberate: these lines are literal brief text whose backtick-wrapped $(...) and "$HERDR_LAB_SESSION" snippets must reach the reading agent verbatim, not expand at scaffold time; only the '"$VAR"' break-outs interpolate.
@@ -240,7 +329,7 @@ You are a crewmate: an autonomous worker agent managed by firstmate. Work on you
 
 # Task
 {TASK}
-
+$MEMORY_BLOCK
 $HERDR_SECTION
 
 # Setup
@@ -331,7 +420,7 @@ You are a crewmate: an autonomous worker agent managed by firstmate. Work on you
 
 # Task
 {TASK}
-
+$MEMORY_BLOCK
 $HERDR_SECTION
 
 # Setup

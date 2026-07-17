@@ -772,8 +772,64 @@ EOF
   pass "startup banner leads the digest with the captain's framed design intact"
 }
 
+# --- active memory in the context digest -------------------------------------
+
+seed_memory_home_for_session() {
+  local home=$1
+  mkdir -p "$home/config"
+  printf 'human:tester@example.invalid\n' > "$home/config/identity"
+  cat > "$home/config/memory-proposers.json" <<'JSON'
+[{"proposer_identity":"human:tester@example.invalid","kind":"explicit_action","allowed_classes":["repo_fact"]}]
+JSON
+}
+
+test_active_memory_block_in_context_digest() {
+  local rec root home fakebin out
+  rec=$(new_world memory-digest)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  seed_memory_home_for_session "$home"
+  FM_HOME="$home" bash "$ROOT/bin/fm-memory.sh" propose --id digest-fact --type project --class repo_fact --scope demoproj --body "Digest visible fact." >/dev/null
+  FM_HOME="$home" bash "$ROOT/bin/fm-memory.sh" confirm --id digest-fact --gate deterministic_recheck >/dev/null
+  FM_HOME="$home" bash "$ROOT/bin/fm-memory.sh" promote --id digest-fact >/dev/null
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "active memory (data/memory, active entries only)" "digest missing the active-memory subsection"
+  assert_contains "$out" "digest-fact" "digest did not surface an active memory entry id"
+
+  pass "session start surfaces active memory in the context digest"
+}
+
+test_active_memory_absent_semantics() {
+  local rec root home fakebin out absent_count
+  rec=$(new_world memory-digest-absent)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "active memory (data/memory, active entries only)" "digest missing the active-memory subsection with no store"
+  assert_contains "$out" "(no memory)" "absent memory store did not print fm-memory.sh's (no memory) marker"
+
+  # The memory block must NOT introduce an ABSENT marker: projects.md,
+  # secondmates.md, captain.md, learnings.md, and backlog.md are all absent in
+  # this world, so exactly five ABSENT markers are expected and no more.
+  absent_count=$(printf '%s\n' "$out" | grep -c '^ABSENT$')
+  [ "$absent_count" -eq 5 ] || fail "expected 5 ABSENT markers, got $absent_count (memory block must print (no memory), not ABSENT): $out"
+
+  pass "session start memory block prints (no memory) for an absent store, never ABSENT"
+}
+
 test_startup_banner_leads_and_plain_text_fallback
 test_context_digest_absent_empty_present
+test_active_memory_block_in_context_digest
+test_active_memory_absent_semantics
 test_lock_refusal_read_only_path
 test_output_ordering_diagnostics_lead
 test_herdr_backend_diagnostics_follow_real_session_start
