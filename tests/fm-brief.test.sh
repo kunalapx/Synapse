@@ -135,21 +135,82 @@ test_self_review_dod_wording() {
   pass "fm-brief.sh: direct-PR/local-only DODs carry the full pre-ship contract cleanly"
 }
 
-test_ship_project_memory_wording() {
+# Project-memory upkeep is OFF by default: a project's AGENTS.md is one shared
+# file, so scaffolding an edit instruction into every ship brief makes
+# concurrent PRs on the same project conflict by construction. The default
+# brief must instead forbid the edit and route the knowledge to the PR body.
+test_ship_project_memory_is_off_by_default() {
   local home id brief
-  home="$TMP_ROOT/project-memory-home"
+  home="$TMP_ROOT/project-memory-default-home"
   mkdir -p "$home/data"
   id="brief-memory-c1"
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj >/dev/null 2>&1
   brief="$home/data/$id/brief.md"
   assert_present "$brief" "brief was not scaffolded"
+  assert_no_grep "# Project memory" "$brief" \
+    "default ship brief still emits the project-memory section"
+  assert_no_grep "fm-ensure-agents-md.sh" "$brief" \
+    "default ship brief still tells the crewmate to run fm-ensure-agents-md.sh"
+  assert_grep "Do not modify \`AGENTS.md\` or \`CLAUDE.md\` in this project" "$brief" \
+    "default ship brief lost the do-not-modify constraint"
+  assert_grep "describe it in the PR body instead" "$brief" \
+    "default ship brief lost the surface-knowledge-in-the-PR-body instruction"
+  # The DOD must not send the crewmate back to a section that no longer exists.
+  assert_no_grep "per Project memory above" "$brief" \
+    "default ship DOD kept a dangling pointer to the project-memory section"
+  assert_no_grep "recorded into \`AGENTS.md\`" "$brief" \
+    "default ship DOD still instructs recording build commands into AGENTS.md"
+  pass "fm-brief.sh: ship briefs omit project-memory upkeep by default and forbid the edit"
+}
+
+# --project-memory restores the section verbatim for a task whose purpose IS
+# the project's memory file, and the do-not-modify rule steps aside for it.
+test_ship_project_memory_opt_in() {
+  local home id brief
+  home="$TMP_ROOT/project-memory-optin-home"
+  mkdir -p "$home/data"
+  id="brief-memory-c2"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --project-memory >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "opt-in brief was not scaffolded"
+  assert_grep "# Project memory" "$brief" \
+    "--project-memory did not restore the project-memory section"
   assert_grep "Record only project knowledge useful to almost every future session." "$brief" \
     "project-memory contract lost the durable-knowledge bar"
   assert_grep "prefer a pointer to the authoritative file, command, or doc over copying the detail" "$brief" \
     "project-memory contract lost pointer-over-copy guidance"
   assert_grep "lacks \`## Maintaining this file\`, add that short self-governance section" "$brief" \
     "project-memory contract lost the self-governance add-in-same-pass rule"
-  pass "fm-brief.sh: ship project-memory wording carries the AGENTS.md authoring bar"
+  assert_grep "$ROOT/bin/fm-ensure-agents-md.sh ." "$brief" \
+    "project-memory contract lost the absolute fm-ensure-agents-md.sh invocation"
+  assert_no_grep "Do not modify \`AGENTS.md\` or \`CLAUDE.md\` in this project" "$brief" \
+    "opt-in brief kept the contradictory do-not-modify constraint"
+  pass "fm-brief.sh: --project-memory restores the AGENTS.md upkeep contract"
+}
+
+# Scout and secondmate scaffolds have no project-memory contract at all, so the
+# flag is rejected rather than ignored - a silent drop would leave the caller
+# believing upkeep was requested.
+test_project_memory_flag_is_ship_only() {
+  local home status
+  home="$TMP_ROOT/project-memory-kind-home"
+  mkdir -p "$home/data"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" pm-scout some-proj --scout >/dev/null 2>&1
+  assert_no_grep "# Project memory" "$home/data/pm-scout/brief.md" \
+    "scout brief emitted a project-memory section"
+
+  status=0
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" pm-scout-rej some-proj --scout --project-memory >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "scout --project-memory must be rejected"
+  assert_absent "$home/data/pm-scout-rej/brief.md" "rejected scout --project-memory still wrote a brief"
+
+  status=0
+  FM_HOME="$home" FM_SECONDMATE_CHARTER=ops "$ROOT/bin/fm-brief.sh" pm-sm --secondmate alpha --project-memory >/dev/null 2>&1 || status=$?
+  expect_code 1 "$status" "secondmate --project-memory must be rejected"
+  assert_absent "$home/data/pm-sm/brief.md" "rejected secondmate --project-memory still wrote a brief"
+
+  pass "fm-brief.sh: --project-memory is ship-only and rejected elsewhere"
 }
 
 test_herdr_lab_contract_is_explicit_and_complete() {
@@ -409,7 +470,9 @@ test_script_parses
 test_help_includes_entire_header
 test_ship_modes_generate_clean_briefs
 test_self_review_dod_wording
-test_ship_project_memory_wording
+test_ship_project_memory_is_off_by_default
+test_ship_project_memory_opt_in
+test_project_memory_flag_is_ship_only
 test_herdr_lab_contract_is_explicit_and_complete
 test_herdr_lab_contract_quotes_foreign_firstmate_path
 test_herdr_lab_omission_is_loud_for_ship_and_scout

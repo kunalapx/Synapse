@@ -45,7 +45,7 @@ The goal is a session that is safe to reset or destroy because everything durabl
      - `--body "<the fact>. Evidence: <the file, command output, or repro that proves it>."` state the fact, then a short evidence line; never paste raw secrets - the store's secret scan will refuse the write.
      Before proposing, `bin/fm-memory.sh recall --scope <scope>` first: if an active entry already covers the fact, skip it, and if the finding supersedes an existing active entry, propose a new-version slug (e.g. `<slug>-v2`) which the store opens as a governed conflict rather than a silent duplicate.
    - Project-intrinsic knowledge: never hand-write a project's `AGENTS.md`.
-     Route it through a normal execution task so an agent records it via `bin/fm-ensure-agents-md.sh` and commits it through that project's delivery pipeline, exactly as section 6 describes.
+     Route it through a dedicated execution task scaffolded with `bin/fm-brief.sh --project-memory` - never a routine task that is also doing other work - so an agent records it via `bin/fm-ensure-agents-md.sh` and commits it through that project's delivery pipeline, exactly as section 6 describes.
      If the agent pool is live, delegate this to an agent rather than doing it inline.
    - Knowledge generalizable to every Synapse user: this repo's own `AGENTS.md` (or other shared, tracked material), shipped through the normal branch -> self-review -> PR -> boss-merge flow for this repo (section 1), never hand-committed straight to `main`.
    - Task-scoped notes: inspect the relevant backlog item with `tasks-axi show <id> --full`, judge whether the new note is new, duplicate, superseding, or obsolete, then write a considered replacement body with `tasks-axi update <id> --body-file <path>`.
