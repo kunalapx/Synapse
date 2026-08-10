@@ -55,6 +55,9 @@
 # By default a ship brief instead carries a rule forbidding AGENTS.md/CLAUDE.md
 # edits and telling the crewmate to surface durable project knowledge in the PR
 # body or its status line, so it can be batched into a separate change later.
+# The rule is subordinate to the {TASK} text, so a task whose stated purpose is
+# a change to those files (a firstmate-repo doc task, say) is not blocked by a
+# rule contradicting its own task section.
 # --project-memory opts back in for a task whose purpose IS the memory file: it
 # emits the project-memory section, which carries the AGENTS.md authoring bar
 # (widely useful knowledge only, pointers over copied detail) and has the
@@ -451,7 +454,7 @@ EOF
 )
 else
 PROJECT_MEMORY_BLOCK=$(cat <<'EOF'
-7. Do not modify `AGENTS.md` or `CLAUDE.md` in this project, and do not run a tool that creates or edits them.
+7. Unless the task above explicitly asks you to change them, do not modify `AGENTS.md` or `CLAUDE.md` in this project, and do not run a tool that creates or edits them.
    That one shared file would otherwise be touched by every task, so concurrent PRs on the same project collide by construction.
    If this task produced durable project knowledge worth keeping, describe it in the PR body instead (or in your `done:` status line when the project ships without a PR) so it can be batched into a separate memory-only change later.
 EOF

@@ -314,7 +314,7 @@ Synapse's own not-yet-committed project knowledge lives in `data/` until an agen
 
 **Project-memory upkeep is its own task, never a side effect of ordinary work.**
 A project's `AGENTS.md` is a single shared file, so a routine execution task that also edits it makes concurrent PRs on that project conflict by construction.
-Ordinary execution task specs therefore forbid the edit and have the agent surface durable project knowledge in its PR body or status line instead (section 11).
+Ordinary execution task specs therefore forbid the incidental edit and have the agent surface durable project knowledge in its PR body or status line instead (section 11).
 Collect that knowledge in `data/` and, when it is worth committing, dispatch one dedicated execution task scaffolded with `bin/fm-brief.sh --project-memory`, which restores the full upkeep contract for that task alone.
 Create a project's `AGENTS.md` lazily, on the first such task; do not eagerly backfill every project.
 
@@ -704,6 +704,7 @@ For an execution task the definition of done is shaped by the project's delivery
 A genuine product or scope decision the agent cannot resolve during any of this escalates through the ordinary `needs-decision:`/`resolved:` status protocol below, exactly as `ask-user` findings escalated under the old no-mistakes gate.
 The scaffold reads the mode via `fm-project-mode.sh`, so you do not pass it.
 Execution task specs forbid touching the project's `AGENTS.md` or `CLAUDE.md` by default, and tell the agent to surface durable project knowledge in its PR body or status line instead, so that one shared file does not put every concurrent PR on the same project into conflict (section 6).
+That rule is subordinate to the task text, so a task whose stated purpose is a change to those files is never blocked by it.
 Add `--project-memory` only for a task whose purpose is that memory file; the scaffold then restores the full upkeep contract, and the flag is rejected for `--scout` and `--secondmate` task specs, which have no such contract.
 For research tasks add `--scout`: the scaffold swaps the definition of done for the report contract (findings to `data/<id>/report.md`, no branch, no push, no PR) and declares the worktree scratch; research task is mode-agnostic.
 For an agent task that will drive Herdr lifecycle behavior, add `--herdr-lab`: the scaffold embeds the hard Herdr-isolation contract backed by `bin/fm-herdr-lab.sh` (a never-`default` lab session, a trailing `--session` on every Herdr call, guarded teardown, and a before/after agent-pool-state tripwire), and the flag is rejected for `--secondmate` task specs.

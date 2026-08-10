@@ -151,8 +151,12 @@ test_ship_project_memory_is_off_by_default() {
     "default ship brief still emits the project-memory section"
   assert_no_grep "fm-ensure-agents-md.sh" "$brief" \
     "default ship brief still tells the crewmate to run fm-ensure-agents-md.sh"
-  assert_grep "Do not modify \`AGENTS.md\` or \`CLAUDE.md\` in this project" "$brief" \
+  assert_grep "do not modify \`AGENTS.md\` or \`CLAUDE.md\` in this project" "$brief" \
     "default ship brief lost the do-not-modify constraint"
+  # Subordinate to {TASK}: a task whose stated purpose IS a change to those
+  # files must not be blocked by a rule contradicting its own task section.
+  assert_grep "Unless the task above explicitly asks you to change them" "$brief" \
+    "default ship brief made the do-not-modify constraint override the task itself"
   assert_grep "describe it in the PR body instead" "$brief" \
     "default ship brief lost the surface-knowledge-in-the-PR-body instruction"
   # The DOD must not send the crewmate back to a section that no longer exists.
@@ -183,7 +187,7 @@ test_ship_project_memory_opt_in() {
     "project-memory contract lost the self-governance add-in-same-pass rule"
   assert_grep "$ROOT/bin/fm-ensure-agents-md.sh ." "$brief" \
     "project-memory contract lost the absolute fm-ensure-agents-md.sh invocation"
-  assert_no_grep "Do not modify \`AGENTS.md\` or \`CLAUDE.md\` in this project" "$brief" \
+  assert_no_grep "do not modify \`AGENTS.md\` or \`CLAUDE.md\` in this project" "$brief" \
     "opt-in brief kept the contradictory do-not-modify constraint"
   pass "fm-brief.sh: --project-memory restores the AGENTS.md upkeep contract"
 }
