@@ -6,7 +6,7 @@
 # description, acceptance criteria, and context, and may adjust other sections
 # when the task genuinely deviates (e.g. working an existing external PR instead
 # of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> [--scout] [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> [--scout] [--herdr-lab] [--project-memory]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
@@ -26,6 +26,8 @@
 #   The flag must be explicit because {TASK} is filled after scaffolding and the
 #   caller-supplied repo string cannot reliably identify this repo. Briefs made
 #   without it carry a loud declaration so an omitted contract cannot be silent.
+#   --project-memory opts a ship brief in to updating the project's AGENTS.md.
+#   It is rejected for --scout and --secondmate, which have no such contract.
 # For ship tasks, the definition of done is shaped by the project's delivery mode
 # (data/projects.md via fm-project-mode.sh; see AGENTS.md project management
 # and task lifecycle). Both modes run the same mandatory pre-PR sequence before
@@ -47,11 +49,21 @@
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
 # "blocked:": pause for a known external wait expected to clear on its own,
 # blocked when firstmate must act.
-# Ship tasks include a project-memory section so durable project-intrinsic
-# learnings can be committed to AGENTS.md through the project's delivery path;
-# it carries the AGENTS.md authoring bar (widely useful knowledge only, pointers
-# over copied detail) and has the crewmate add the fm-ensure-agents-md.sh
-# self-governance section when a touched project AGENTS.md lacks it.
+# Project-memory upkeep is OFF by default. A project's AGENTS.md is one file
+# every task would otherwise touch, so scaffolding that instruction into every
+# ship brief makes concurrent PRs on the same project conflict by construction.
+# By default a ship brief instead carries a rule forbidding AGENTS.md/CLAUDE.md
+# edits and telling the crewmate to surface durable project knowledge in the PR
+# body or its status line, so it can be batched into a separate change later.
+# The rule is subordinate to the {TASK} text, so a task whose stated purpose is
+# a change to those files (a firstmate-repo doc task, say) is not blocked by a
+# rule contradicting its own task section.
+# --project-memory opts back in for a task whose purpose IS the memory file: it
+# emits the project-memory section, which carries the AGENTS.md authoring bar
+# (widely useful knowledge only, pointers over copied detail) and has the
+# crewmate add the fm-ensure-agents-md.sh self-governance section when a touched
+# project AGENTS.md lacks it. bin/fm-ensure-agents-md.sh is unchanged either way;
+# it is simply no longer invoked by default.
 # Refuses to overwrite an existing brief.
 set -eu
 
@@ -81,6 +93,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 KIND=ship
 HERDR_LAB=0
 NO_PROJECTS=0
+PROJECT_MEMORY=0
 POS=()
 for a in "$@"; do
   case "$a" in
@@ -88,6 +101,7 @@ for a in "$@"; do
     --secondmate) KIND=secondmate ;;
     --herdr-lab) HERDR_LAB=1 ;;
     --no-projects) NO_PROJECTS=1 ;;
+    --project-memory) PROJECT_MEMORY=1 ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -95,6 +109,13 @@ ID=${POS[0]}
 
 if [ "$KIND" = secondmate ] && [ "$HERDR_LAB" -eq 1 ]; then
   echo "error: --herdr-lab applies only to crewmate ship or scout briefs" >&2
+  exit 1
+fi
+
+# Rejected rather than ignored for scout and secondmate: silently dropping it
+# would leave the caller believing project-memory upkeep was requested.
+if [ "$PROJECT_MEMORY" -eq 1 ] && [ "$KIND" != ship ]; then
+  echo "error: --project-memory applies only to crewmate ship briefs" >&2
   exit 1
 fi
 
@@ -379,7 +400,7 @@ EOF
 # build/lint/test check first, then conditional /verify-feature, then
 # /high-level-review (AGENTS.md section 7 "Validate").
 # shellcheck disable=SC2016 # single quotes are deliberate: literal brief text whose backticks must reach the reading agent verbatim, not expand at scaffold time.
-SELF_REVIEW_STEPS='1. Build/lint/test check (mandatory, first): find the build, lint, and typecheck commands for this project - in its `AGENTS.md` if documented, otherwise discovered from `package.json`, `README`, or similar and recorded into `AGENTS.md` per Project memory above - run them, and confirm they pass.
+SELF_REVIEW_STEPS='1. Build/lint/test check (mandatory, first): find the build, lint, and typecheck commands for this project - in its `AGENTS.md` if documented, otherwise discovered from `package.json`, `README`, or similar - run them, and confirm they pass.
 2. If the task above references a tracked ticket (a Notion/Dart task or a GitHub Issue), run /verify-feature against it.
 3. Run /high-level-review against your diff vs the base branch, and fix everything it flags under Critical/Architectural/Moderate yourself.
 A decision you cannot make on your own during any of these steps follows rule 6 below.'
@@ -414,6 +435,31 @@ EOF
 )
     ;;
 esac
+
+# Project-memory block, off by default (see the header). Off, it is rule 7 of
+# the Rules list, so it must render with no leading blank line; on, it is a
+# standalone section, so it opens with one. Keep both bodies free of
+# apostrophes: these heredocs sit inside a command substitution, where a stray
+# quote breaks parsing of the whole script (issue #166).
+if [ "$PROJECT_MEMORY" -eq 1 ]; then
+PROJECT_MEMORY_BLOCK=$(cat <<EOF
+
+# Project memory
+If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.
+Record only project knowledge useful to almost every future session.
+For anything the codebase already shows, prefer a pointer to the authoritative file, command, or doc over copying the detail.
+If you touch a project \`AGENTS.md\` that lacks \`## Maintaining this file\`, add that short self-governance section from \`$FM_ROOT/bin/fm-ensure-agents-md.sh\` in the same pass.
+Keep it proportionate: skip \`AGENTS.md\` edits for trivial tasks that produced no durable project knowledge.
+EOF
+)
+else
+PROJECT_MEMORY_BLOCK=$(cat <<'EOF'
+7. Unless the task above explicitly asks you to change them, do not modify `AGENTS.md` or `CLAUDE.md` in this project, and do not run a tool that creates or edits them.
+   That one shared file would otherwise be touched by every task, so concurrent PRs on the same project collide by construction.
+   If this task produced durable project knowledge worth keeping, describe it in the PR body instead (or in your `done:` status line when the project ships without a PR) so it can be batched into a separate memory-only change later.
+EOF
+)
+fi
 
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
@@ -454,14 +500,12 @@ $RULE1
    finding you cannot resolve on your own), append \`needs-decision: {summary of options}\`
    and stop. Firstmate will reply with the decision.
    When firstmate replies or a blocker clears and you resume, append \`resolved: {how it was decided or unblocked}\` (add the same \`[key=<slug>]\` if you opened it with one) so the decision or blocker is durably closed and does not keep resurfacing.
-
-# Project memory
-If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.
-Record only project knowledge useful to almost every future session.
-For anything the codebase already shows, prefer a pointer to the authoritative file, command, or doc over copying the detail.
-If you touch a project \`AGENTS.md\` that lacks \`## Maintaining this file\`, add that short self-governance section from \`$FM_ROOT/bin/fm-ensure-agents-md.sh\` in the same pass.
-Keep it proportionate: skip \`AGENTS.md\` edits for trivial tasks that produced no durable project knowledge.
+$PROJECT_MEMORY_BLOCK
 
 $DOD
 EOF
-echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK})"
+if [ "$PROJECT_MEMORY" -eq 1 ]; then
+  echo "scaffolded: $BRIEF (ship, mode=$MODE, project-memory; replace {TASK})"
+else
+  echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK})"
+fi

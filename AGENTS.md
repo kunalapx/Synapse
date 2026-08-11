@@ -312,9 +312,11 @@ Project `AGENTS.md` files are created and updated by agents inside their worktre
 Synapse ensures this through the task spec contract and `bin/fm-ensure-agents-md.sh`; Synapse does not perform the write itself.
 Synapse's own not-yet-committed project knowledge lives in `data/` until an agent folds it into the project's `AGENTS.md`.
 
-Create a project's `AGENTS.md` lazily on first need.
-The first execution task that touches a project lacking one and has durable project-intrinsic knowledge to record should run `bin/fm-ensure-agents-md.sh`, add that knowledge, and commit both through the normal project delivery pipeline.
-Do not eagerly backfill every project.
+**Project-memory upkeep is its own task, never a side effect of ordinary work.**
+A project's `AGENTS.md` is a single shared file, so a routine execution task that also edits it makes concurrent PRs on that project conflict by construction.
+Ordinary execution task specs therefore forbid the incidental edit and have the agent surface durable project knowledge in its PR body or status line instead (section 11).
+Collect that knowledge in `data/` and, when it is worth committing, dispatch one dedicated execution task scaffolded with `bin/fm-brief.sh --project-memory`, which restores the full upkeep contract for that task alone.
+Create a project's `AGENTS.md` lazily, on the first such task; do not eagerly backfill every project.
 
 ### Knowledge routing
 
@@ -323,7 +325,7 @@ Route each piece of durable knowledge to its most specific home:
 | Kind of knowledge | Home |
 | --- | --- |
 | Boss preferences and working style | `data/captain.md`, inspected first and rewritten or pruned in place |
-| Project-intrinsic knowledge | that project's own `AGENTS.md`, via normal agent delivery, never hand-written by Synapse |
+| Project-intrinsic knowledge | that project's own `AGENTS.md`, via a dedicated `bin/fm-brief.sh --project-memory` execution task, never as a side effect of unrelated work and never hand-written by Synapse |
 | Fleet learnings, gotchas, conventions, repo facts, architecture decisions, and business facts | the governed memory store (`bin/fm-memory.sh`), proposed as a candidate via `/stow` (see `### Governed memory`); no longer hand-appended to `data/learnings.md` |
 | Knowledge generalizable to every Synapse user | the shared `AGENTS.md`, shipped via a self-reviewed PR (section 7) |
 | Task-scoped notes | backlog item notes, inspect first with `tasks-axi show <id> --full`, then replace the body with `tasks-axi update <id> --body-file <path>`, adding `--archive-body` when superseded prior state should remain recoverable, or hand-edit per the active backend |
@@ -455,7 +457,7 @@ After any merge you perform without asking the boss, post a one-line "merged <fu
 
 ### Validate
 
-Every execution task validates its own diff before reporting `done`, whichever mode it ships through (`direct-PR` or `local-only`): implement the change, then run the project's own build, lint, and typecheck commands and confirm they pass - sourced from that project's own `AGENTS.md` when it documents them, or discovered from `package.json`/`README`/etc. and recorded into `AGENTS.md` per the project-memory contract (section 11) when it does not yet.
+Every execution task validates its own diff before reporting `done`, whichever mode it ships through (`direct-PR` or `local-only`): implement the change, then run the project's own build, lint, and typecheck commands and confirm they pass - sourced from that project's own `AGENTS.md` when it documents them, or discovered from `package.json`/`README`/etc. when it does not.
 This build/lint/test check is a mandatory, explicitly named step that runs before review; it is never folded silently into the review step, so it cannot be silently skipped.
 Only once it passes does the agent run `/verify-feature` when the task carries a tracked Notion/Dart/GitHub-Issue reference to check the branch against (skip it entirely for ad-hoc chat-described work with no ticket), then `/high-level-review` against the diff vs the base branch, fixing what it flags under Critical/Architectural/Moderate itself.
 The task spec written by `bin/fm-brief.sh` carries this contract (section 11); Synapse does not trigger or drive it - the agent's own definition of done already includes it, so there is no separate Synapse-initiated validation step.
@@ -698,12 +700,13 @@ Correct or delete stale free-form notes the moment you catch them, and put durab
 
 Scaffold with `bin/fm-brief.sh <id> <repo-name>` - it writes `data/<id>/brief.md` with the standard contract (branch setup, status-reporting protocol, push/merge rules, definition of done) and all paths filled in.
 The execution task spec Setup opens with a worktree-isolation assertion ahead of the branch step: the agent confirms it is in its own disposable task worktree, not the primary checkout, and stops with `blocked: launched in primary checkout, not an isolated worktree` if not - the upstream half of the worktree-tangle guard (section 8).
-For an execution task the definition of done is shaped by the project's delivery mode (section 6): both `direct-PR` and `local-only` have the agent implement, then run a mandatory, explicitly named build/lint/test check - the project's own build, lint, and typecheck commands, sourced from its `AGENTS.md` or discovered and recorded there per the project-memory contract below - and only once that passes review its own diff, running `/verify-feature` first when the task carries a tracked Notion/Dart/GitHub-Issue reference, then `/high-level-review` against the base branch, fixing what it flags itself, before `direct-PR` pushes and opens the PR itself and `local-only` stops at "ready in branch" for Synapse to review and merge locally.
+For an execution task the definition of done is shaped by the project's delivery mode (section 6): both `direct-PR` and `local-only` have the agent implement, then run a mandatory, explicitly named build/lint/test check - the project's own build, lint, and typecheck commands, sourced from its `AGENTS.md` or discovered from `package.json`/`README`/etc. - and only once that passes review its own diff, running `/verify-feature` first when the task carries a tracked Notion/Dart/GitHub-Issue reference, then `/high-level-review` against the base branch, fixing what it flags itself, before `direct-PR` pushes and opens the PR itself and `local-only` stops at "ready in branch" for Synapse to review and merge locally.
 A genuine product or scope decision the agent cannot resolve during any of this escalates through the ordinary `needs-decision:`/`resolved:` status protocol below, exactly as `ask-user` findings escalated under the old no-mistakes gate.
 The scaffold reads the mode via `fm-project-mode.sh`, so you do not pass it.
-Execution task specs also include the project-memory contract: run `bin/fm-ensure-agents-md.sh` when the project already has agent-memory files or when the task produced durable project-intrinsic knowledge, then record proportionate learnings in `AGENTS.md`.
+Execution task specs forbid touching the project's `AGENTS.md` or `CLAUDE.md` by default, and tell the agent to surface durable project knowledge in its PR body or status line instead, so that one shared file does not put every concurrent PR on the same project into conflict (section 6).
+That rule is subordinate to the task text, so a task whose stated purpose is a change to those files is never blocked by it.
+Add `--project-memory` only for a task whose purpose is that memory file; the scaffold then restores the full upkeep contract, and the flag is rejected for `--scout` and `--secondmate` task specs, which have no such contract.
 For research tasks add `--scout`: the scaffold swaps the definition of done for the report contract (findings to `data/<id>/report.md`, no branch, no push, no PR) and declares the worktree scratch; research task is mode-agnostic.
-Research task specs do not include the project-memory step, because their deliverable is a report rather than a committed project change.
 For an agent task that will drive Herdr lifecycle behavior, add `--herdr-lab`: the scaffold embeds the hard Herdr-isolation contract backed by `bin/fm-herdr-lab.sh` (a never-`default` lab session, a trailing `--session` on every Herdr call, guarded teardown, and a before/after agent-pool-state tripwire), and the flag is rejected for `--secondmate` task specs.
 The flag must be explicit because the scaffold cannot read the `{TASK}` text it fills in later, so every execution or research task spec scaffolded without it carries a loud not-enabled gate telling the agent to stop and regenerate with `--herdr-lab` if the task turns out to touch Herdr lifecycle.
 For domain agents use `bin/fm-brief.sh <id> --secondmate {<project>...|--no-projects}`.
