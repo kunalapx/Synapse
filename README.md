@@ -39,9 +39,11 @@ Full detail on every feature lives in [docs/architecture.md](docs/architecture.m
 ### Requirements
 
 - A verified agent harness: Claude Code, Grok, Pi, Codex, or OpenCode.
+- Node.js, which every `npm install -g` step in the rest of the toolchain depends on.
 - Git and the GitHub CLI, authenticated through `gh auth login`.
-- tmux, for the reference session backend.
+- tmux and [treehouse](https://github.com/kunchenguid/treehouse), for the reference session backend and its disposable worktrees.
 
+That list is not exhaustive: [docs/configuration.md](docs/configuration.md) owns the complete required toolchain in its "Toolchain" section.
 Synapse detects and offers to install everything else.
 
 ### Recommended harnesses
