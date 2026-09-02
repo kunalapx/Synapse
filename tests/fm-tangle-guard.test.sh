@@ -7,7 +7,8 @@
 # is a crewmate branching/committing in the primary instead of its own worktree,
 # stranding the primary on a feature branch. Two guards cover it:
 #   GUARD 1 (prevention) - the brief asserts isolation before its branch step, and
-#            fm-spawn refuses to launch unless the resolved worktree is isolated.
+#            fm-spawn refuses to launch unless the resolved worktree is isolated
+#            AND a treehouse-managed linked worktree of the target project.
 #   GUARD 2 (detection)  - fm-guard and fm-bootstrap alarm when the primary is on
 #            a feature branch, and stay silent on the default branch or detached.
 # These cases pin: the shared lib's branch classification, the fm-guard banner,
@@ -15,20 +16,21 @@
 # abort - all hermetic over temp git repos and fakebins.
 set -u
 
-# shellcheck source=tests/lib.sh
-. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/fixtures.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
-# shellcheck source=bin/fm-tangle-lib.sh
+# shellcheck source=/dev/null
 . "$ROOT/bin/fm-tangle-lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-tangle-guard)
 fm_git_identity fmtest fmtest@example.invalid
 
-# A fresh git repo on `main` with one commit. Echoes its path.
+# A fresh git repo on `main` with one commit and a local origin. Echoes its path.
 make_repo() {
   local dir=$1
   git init -q -b main "$dir"
   git -C "$dir" commit -q --allow-empty -m init
+  fm_git_add_origin "$dir" "$dir.origin.git"
   printf '%s\n' "$dir"
 }
 
@@ -127,7 +129,7 @@ test_brief_assertion_precedes_branch() {
   local home brief iso br
   home="$TMP_ROOT/brief-home"
   mkdir -p "$home/data"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" tangle-brief-cc3 alpha >/dev/null 2>&1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" tangle-brief-cc3 alpha --mode no-mistakes >/dev/null 2>&1
   brief="$home/data/tangle-brief-cc3/brief.md"
   assert_present "$brief" "brief was not scaffolded"
   assert_grep "blocked: launched in primary checkout, not an isolated worktree" "$brief" \
@@ -149,46 +151,12 @@ test_brief_assertion_precedes_branch() {
 
 # --- GUARD 1b: fm-spawn isolation abort -------------------------------------
 
-# A fake tmux that reports FM_FAKE_PANE_PATH as the post-`treehouse get` pane cwd
-# (so the spawn's worktree-resolution loop resolves to a path we control), names
-# the session on '#S', and swallows window ops. Echoes the fakebin dir.
-make_spawn_fakebin() {
-  local dir=$1 fakebin
-  fakebin=$(fm_fakebin "$dir")
-  cat > "$fakebin/tmux" <<'SH'
-#!/usr/bin/env bash
-set -u
-case "$*" in
-  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
-esac
-case "${1:-}" in
-  display-message) printf 'firstmate\n'; exit 0 ;;
-  list-windows) exit 0 ;;
-  has-session|new-session|new-window|send-keys) exit 0 ;;
-esac
-exit 0
-SH
-  chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" treehouse
-  printf '%s\n' "$fakebin"
-}
-
+# Spawn isolation uses the shared spawn fakebin (pane path + window ops).
 run_spawn() {
   local home=$1 id=$2 proj=$3 pane=$4 fakebin=$5
-  mkdir -p "$home/data/$id"
-  printf 'brief\n' > "$home/data/$id/brief.md"
-  # FM_SPAWN_WORKTREE_POLL_SLEEP_SECS=0: FM_FAKE_PANE_PATH is a fixed value for
-  # every poll (never transitions to a real worktree like a genuine race would),
-  # so a path that never satisfies is_linked_worktree_of now runs the full
-  # 60-iteration poll before timing out rather than failing on the first poll.
-  # Zero the sleep so that still resolves instantly in this test.
-  FM_ROOT_OVERRIDE='' FM_HOME="$home" \
-    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
-    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$pane" TMUX="fake,1,0" \
-    FM_SPAWN_WORKTREE_POLL_SLEEP_SECS=0 \
-    PATH="$fakebin:$PATH" \
-    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" codex 2>&1
+  fm_test_spawn_brief "$home" "$id" brief
+  fm_test_run_spawn "$home" "$pane" "$fakebin" \
+    "$id" "$proj" codex --mode no-mistakes --yolo off
 }
 
 test_spawn_isolation_abort() {
@@ -201,31 +169,67 @@ test_spawn_isolation_abort() {
   git -C "$proj" worktree add -q --detach "$TMP_ROOT/spawn-wt" >/dev/null 2>&1
   mkdir -p "$TMP_ROOT/spawn-notgit" "$proj/sub"
 
-  # Abort: the pane resolves to a plain non-git directory (not a worktree at
-  # all) on every poll. is_linked_worktree_of never accepts it, so the loop
-  # exhausts its full retry budget and reports the timeout, rather than the old
-  # immediate validate_spawn_worktree message - still a safe abort, just via
-  # the wait-loop's own timeout path now that "distinct from the project" alone
-  # is no longer sufficient acceptance criteria.
+  # Abort: the pane resolves to a plain non-git directory (not a worktree at all).
   out=$(run_spawn "$home" abort-notgit-dd4 "$proj" "$TMP_ROOT/spawn-notgit" "$fakebin"); status=$?
   expect_code 1 "$status" "spawn into a non-worktree dir should abort"
-  assert_contains "$out" "did not enter a worktree within" "non-worktree spawn lacked the timeout error"
+  assert_contains "$out" "did not yield an isolated worktree" "non-worktree spawn lacked the isolation error"
   assert_absent "$home/state/abort-notgit-dd4.meta" "aborted spawn must not record meta"
 
-  # Abort: the pane resolves INTO the primary checkout (a subdir of PROJ_ABS)
-  # on every poll. That subdir shares the primary checkout's own --git-dir (it
-  # is not a linked worktree), so is_linked_worktree_of never accepts it either
-  # and this also now aborts via the wait-loop's timeout.
+  # Abort: the pane resolves INTO the primary checkout (a subdir of PROJ_ABS).
   out=$(run_spawn "$home" abort-primary-ee5 "$proj" "$proj/sub" "$fakebin"); status=$?
   expect_code 1 "$status" "spawn landing inside the primary checkout should abort"
-  assert_contains "$out" "did not enter a worktree within" "primary-checkout spawn lacked the timeout error"
+  assert_contains "$out" "did not yield an isolated worktree" "primary-checkout spawn lacked the isolation error"
 
   # Proceed: the pane resolves to a genuine, isolated worktree.
   out=$(run_spawn "$home" ok-isolated-ff6 "$proj" "$TMP_ROOT/spawn-wt" "$fakebin"); status=$?
   expect_code 0 "$status" "spawn into a genuine isolated worktree should succeed"
   assert_contains "$out" "spawned ok-isolated-ff6" "isolated spawn did not report success"
   assert_not_contains "$out" "did not yield an isolated worktree" "isolated spawn wrongly tripped the guard"
+  assert_not_contains "$out" "is not a treehouse-managed linked worktree" \
+    "isolated spawn wrongly tripped the treehouse-ownership assertion"
   pass "fm-spawn: aborts unless the resolved worktree is a genuine, isolated worktree"
+}
+
+# --- GUARD 1b(ii): fm-spawn treehouse-ownership assertion -------------------
+#
+# The cases above are all caught by "a self-consistent toplevel distinct from
+# the project dir". That test is necessary but NOT sufficient, and the two
+# cases below are exactly the ones it lets through: a git checkout that IS its
+# own toplevel and IS distinct from the project still tangles a crewmate into
+# the wrong copy when it is some OTHER repository's main checkout - worst case,
+# the primary firstmate checkout itself, which is a distinct toplevel of the
+# very same repo whenever a task targets firstmate's own repo. Only the
+# positive treehouse-ownership signal (a LINKED worktree whose git common dir
+# is the TARGET project's own) rejects them.
+test_spawn_ownership_abort() {
+  local home proj other other_wt fakebin out status
+  home="$TMP_ROOT/ownership-home"
+  mkdir -p "$home/data"
+  proj=$(make_repo "$TMP_ROOT/ownership-proj")
+  other=$(make_repo "$TMP_ROOT/ownership-other")
+  other_wt="$TMP_ROOT/ownership-other-wt"
+  git -C "$other" worktree add -q --detach "$other_wt" >/dev/null 2>&1
+  fakebin=$(make_spawn_fakebin "$TMP_ROOT/ownership-fake")
+
+  # Abort: an unrelated repository's MAIN checkout. It is its own toplevel and
+  # distinct from the project, so every pre-ownership check passes; its git dir
+  # is its own git common dir, so it is a main checkout, not a linked worktree.
+  out=$(run_spawn "$home" abort-foreign-main-hh8 "$proj" "$other" "$fakebin"); status=$?
+  expect_code 1 "$status" "spawn into another repository's main checkout should abort"
+  assert_contains "$out" "is not a treehouse-managed linked worktree" \
+    "foreign main checkout lacked the treehouse-ownership error"
+  assert_absent "$home/state/abort-foreign-main-hh8.meta" "aborted spawn must not record meta"
+
+  # Abort: a genuine LINKED worktree, but of the wrong repository. Its git dir
+  # differs from its git common dir, so the linked-worktree half of the signal
+  # passes; only the "same repository as the project" half rejects it.
+  out=$(run_spawn "$home" abort-foreign-wt-ii9 "$proj" "$other_wt" "$fakebin"); status=$?
+  expect_code 1 "$status" "spawn into a linked worktree of another repository should abort"
+  assert_contains "$out" "is not a treehouse-managed linked worktree" \
+    "foreign linked worktree lacked the treehouse-ownership error"
+  assert_absent "$home/state/abort-foreign-wt-ii9.meta" "aborted spawn must not record meta"
+
+  pass "fm-spawn: aborts when the resolved worktree is a foreign repo's checkout, not a linked worktree of the project"
 }
 
 # --- GUARD 1c: fm-spawn tmux window construction ----------------------------
@@ -268,15 +272,10 @@ SH
 
 run_spawn_record() {
   local home=$1 id=$2 proj=$3 pane=$4 fakebin=$5 rec=$6
-  mkdir -p "$home/data/$id"
-  printf 'brief\n' > "$home/data/$id/brief.md"
-  FM_ROOT_OVERRIDE='' FM_HOME="$home" \
-    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
-    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$pane" TMUX="fake,1,0" \
-    FM_TMUX_REC="$rec" \
-    PATH="$fakebin:$PATH" \
-    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" codex 2>&1
+  fm_test_spawn_brief "$home" "$id" brief
+  FM_TMUX_REC="$rec" \
+    fm_test_run_spawn "$home" "$pane" "$fakebin" \
+    "$id" "$proj" codex --mode no-mistakes --yolo off
 }
 
 test_spawn_tmux_window_construction() {
@@ -320,4 +319,5 @@ test_guard_banner
 test_bootstrap_line
 test_brief_assertion_precedes_branch
 test_spawn_isolation_abort
+test_spawn_ownership_abort
 test_spawn_tmux_window_construction

@@ -9,9 +9,17 @@ set -u
 # shellcheck source=tests/lib.sh
 # shellcheck disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=bin/fm-secondmate-registry-lib.sh
+# shellcheck disable=SC1091
+. "$ROOT/bin/fm-secondmate-registry-lib.sh"
 
 BEARINGS="$ROOT/bin/fm-bearings-snapshot.sh"
 TMP_ROOT=$(fm_test_tmproot fm-bearings)
+# Keep disposable homes outside the snapshot's fixture repo boundary even when
+# TMPDIR is inside an isolated source worktree.
+FM_ROOT_OVERRIDE="$TMP_ROOT/fixture-root"
+mkdir -p "$FM_ROOT_OVERRIDE"
+export FM_ROOT_OVERRIDE
 
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 
@@ -75,6 +83,18 @@ make_home() {  # <name>
   printf '%s\n' "$home"
 }
 
+record_claude_state() {  # <state-dir> <id> <busy|idle>
+  local state=$1 id=$2 semantic_state=$3 gen event
+  case "$semantic_state" in
+    busy) event=user-prompt-submit ;;
+    idle) event=stop ;;
+    *) fail "unsupported semantic fixture state: $semantic_state" ;;
+  esac
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$state" "$id")
+  "$ROOT/bin/fm-busy-event.sh" apply "$state" "$id" "$semantic_state" --gen "$gen" \
+    --source claude-hook --event "$event"
+}
+
 fixture_mate_home() {  # <parent-home>
   printf '%s/%s-secondmate-home\n' "$TMP_ROOT" "$(basename "$1")"
 }
@@ -108,18 +128,20 @@ EOF
     "window=firstmate:fm-ship-task" \
     "worktree=$home/projects/ship-wt" \
     "project=firstmate" \
-    "harness=codex" \
+    "harness=claude" \
     "kind=ship" \
     "mode=no-mistakes" \
     "pr=https://github.com/kunchenguid/firstmate/pull/9"
+  record_claude_state "$home/state" ship-task busy
   printf 'working: building the thing\n' > "$home/state/ship-task.status"
   fm_write_meta "$home/state/scout-x.meta" \
     "window=firstmate:fm-scout-x" \
     "worktree=$home/projects/ship-wt" \
     "project=firstmate" \
-    "harness=codex" \
+    "harness=claude" \
     "kind=scout" \
     "mode=scout"
+  record_claude_state "$home/state" scout-x idle
   printf 'done: report ready\n' > "$home/state/scout-x.status"
   fm_write_meta "$home/state/mate.meta" \
     "window=firstmate:fm-mate" \
@@ -136,9 +158,10 @@ EOF
     "window=firstmate:fm-external-wait" \
     "worktree=$home/projects/ship-wt" \
     "project=firstmate" \
-    "harness=codex" \
+    "harness=claude" \
     "kind=ship" \
     "mode=no-mistakes"
+  record_claude_state "$home/state" external-wait idle
   printf 'paused: declared external-wait for upstream release\n' > "$home/state/external-wait.status"
   # The secondmate's OWN home backlog records a merge it managed. This lands in the
   # secondmate home, never the main backlog, so landed-work views only see it via the
@@ -147,19 +170,126 @@ EOF
 ## In flight
 - [ ] mate - Decide subscription order (repo: firstmate) (kind: ship) (since 2026-07-11)
 
+## Queued
+- [ ] mate-decision-race - Choose subscription order (repo: firstmate) (kind: captain) (hold: captain choice pending) (hold-kind: captain)
+
 ## Done
 - [x] mate-landed - Secondmate-managed fix https://github.com/kunchenguid/firstmate/pull/50 (repo: firstmate) (kind: ship) (merged 2026-07-11)
 EOF
   mkdir -p "$mate/projects/mate"
   fm_write_meta "$mate/state/mate.meta" \
     "window=firstmate:fm-mate" "worktree=$mate/projects/mate" "project=firstmate" \
-    "harness=codex" "kind=ship" "mode=no-mistakes"
+    "harness=claude" "kind=ship" "mode=no-mistakes"
+  record_claude_state "$mate/state" mate idle
   printf 'needs-decision [key=race]: pick subscribe order\n' > "$mate/state/mate.status"
+}
+
+refresh_local_secondmate_ledgers() {  # <parent-home>
+  local parent=$1 registry line mate refresh_path=$PATH
+  registry="$parent/data/secondmates.md"
+  [ -f "$registry" ] && [ -r "$registry" ] || return 0
+  # Once this fixture's fake backend exists, ledger production must use it too;
+  # otherwise child state depends on whether the CI host has a live tmux server.
+  [ ! -x "$parent/fakebin/tmux" ] || refresh_path="$parent/fakebin:$refresh_path"
+  while IFS= read -r line || [ -n "$line" ]; do
+    secondmate_registry_parse_line "$line" || continue
+    [ "$SECONDMATE_REGISTRY_REMOTE" -eq 0 ] || continue
+    mate=$SECONDMATE_REGISTRY_HOME
+    [ -f "$mate/.fm-secondmate-home" ] && [ -f "$mate/AGENTS.md" ] \
+      && [ -d "$mate/bin" ] && [ -d "$mate/data" ] && [ -d "$mate/state" ] || continue
+    PATH="$refresh_path" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$mate" \
+      FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z FM_SNAPSHOT_NOW_EPOCH=1783792800 \
+      "$ROOT/bin/fm-home-summary-refresh.sh" >/dev/null 2>&1 || true
+  done < "$registry"
 }
 
 run() {  # <home> <fakebin> <args...>
   local home=$1 fakebin=$2; shift 2
+  case " $* " in
+    *" --all-landed "*) PATH="$fakebin:$PATH" FM_SNAPSHOT_SECONDMATE_LANDED_PER_HOME=0 refresh_local_secondmate_ledgers "$home" ;;
+    *) PATH="$fakebin:$PATH" refresh_local_secondmate_ledgers "$home" ;;
+  esac
   PATH="$fakebin:$PATH" FM_HOME="$home" FM_BEARINGS_NOW=2026-07-11T18:00:00Z NET_LOG="$home/net.log" "$BEARINGS" "$@"
+}
+
+write_remote_home_summary() {  # <remote-home> <generated-epoch>
+  local home=$1 epoch=$2
+  mkdir -p "$home/state"
+  jq -n --arg home "$home" --argjson epoch "$epoch" '{
+    schema:"fm-secondmate-home-summary.v1",
+    generated:"2026-09-01T22:00:00Z",generated_epoch:$epoch,home:$home,
+    valid:true,reason:null,invalidity:{kind:null,ids:[]},state:"no_active_work",
+    active_children:[],decisions_open:[],holds:[],queued:[],landed:[],endpoints:[],
+    counts:{active_children:0,decisions_open:0,holds:0,queued:0,landed:0,endpoints:0},omitted:[]
+  }' > "$home/state/home-summary.json"
+}
+
+make_remote_ledger_fleet() {  # <parent-home> <count>
+  local parent=$1 count=$2 i id remote_home
+  mkdir -p "$parent/data" "$parent/state" "$parent/config" "$parent/projects"
+  : > "$parent/data/backlog.md"
+  : > "$parent/data/secondmates.md"
+  i=1
+  while [ "$i" -le "$count" ]; do
+    id="ledger-$i"
+    remote_home="$TMP_ROOT/remote-ledger-home-$i"
+    mkdir -p "$remote_home/state"
+    remote_home=$(cd "$remote_home" && pwd -P)
+    printf -- '- %s - ledger fixture (host: host-%s; root: /remote/root; home: %s; scope: fixture; projects: sample; added 2026-09-01)\n' \
+      "$id" "$i" "$remote_home" >> "$parent/data/secondmates.md"
+    fm_write_meta "$parent/state/$id.meta" \
+      "kind=secondmate" "mode=secondmate" "harness=pi" \
+      "remote_host=host-$i" "remote_root=/remote/root" "home=$remote_home"
+    write_remote_home_summary "$remote_home" 1000
+    i=$((i + 1))
+  done
+}
+
+make_remote_ledger_ssh() {  # <dir>
+  local dir=$1 fb="$1/fakebin"
+  mkdir -p "$fb"
+  cat > "$fb/fake-ssh" <<'SH'
+#!/usr/bin/env bash
+set -u
+while [ "$#" -gt 0 ]; do
+  case "$1" in -o) shift 2 ;; --) shift; break ;; *) exit 90 ;; esac
+done
+shift 2
+remote_home=$(perl -MMIME::Base64=decode_base64 -e 'print decode_base64($ARGV[0])' "$3")
+args=()
+while IFS= read -r -d '' arg; do args+=("$arg"); done \
+  < <(perl -MMIME::Base64=decode_base64 -e 'print decode_base64($ARGV[0])' "$4")
+printf '%s\t%s\n' "$remote_home" "${args[0]:-}" >> "$FM_TEST_LEDGER_CALL_LOG"
+if [ -f "$remote_home/state/slow-ledger-read" ]; then
+  sleep 30 &
+  sleeper=$!
+  printf '%s %s\n' "$$" "$sleeper" >> "$FM_TEST_LEDGER_PID_LOG"
+  wait "$sleeper"
+fi
+case "${args[0]:-}" in
+  fm-remote-file.sh)
+    [ -f "$remote_home/state/home-summary.json" ] || exit 1
+    if [ -f "$remote_home/state/unbounded-ledger-read" ]; then
+      yes x
+    else
+      cat "$remote_home/state/home-summary.json"
+    fi
+    ;;
+  *) exit 91 ;;
+esac
+SH
+  chmod +x "$fb/fake-ssh"
+  printf '%s\n' "$fb"
+}
+
+run_remote_ledger_bearings() {  # <parent-home> <fakebin> <epoch>
+  local parent=$1 fakebin=$2 epoch=$3
+  FM_HOME="$parent" FM_ROOT_OVERRIDE="$ROOT" FM_SSH_BIN="$fakebin/fake-ssh" \
+    FM_TEST_LEDGER_CALL_LOG="$parent/ledger-calls.log" \
+    FM_TEST_LEDGER_PID_LOG="$parent/ledger-pids.log" \
+    FM_SNAPSHOT_CACHE_DIR="$parent/state/summary-cache" \
+    FM_SNAPSHOT_BUDGET=3 FM_SNAPSHOT_NOW_EPOCH="$epoch" \
+    FM_BEARINGS_NOW=2026-09-01T22:00:00Z "$BEARINGS" --json
 }
 
 # End-to-end Domain Alpha regression fixture.
@@ -188,6 +318,7 @@ EOF
       "$i" "$i" "$i" >> "$mate/data/backlog.md"
     i=$((i + 1))
   done
+  refresh_local_secondmate_ledgers "$home"
 }
 
 # This is the Domain Alpha failure shape exactly: the structured home says Phase 7 is Done
@@ -325,14 +456,15 @@ EOF
   fm_write_meta "$mate/state/phase8.meta" \
     "window=firstmate:fm-phase8" "worktree=$mate/projects/phase8" "project=sample" \
     "harness=codex" "kind=ship" "mode=no-mistakes"
-  printf 'working [key=phase8]: implementing Phase 8 parity\n' > "$mate/state/phase8.status"
+  printf 'working [key=phase8]: implementing Phase 8 parity\nneeds-decision [key=release]: choose release A or B\n' \
+    > "$mate/state/phase8.status"
   fakebin=$(make_fakebin "$home")
   json=$(run "$home" "$fakebin" --json)
   printf '%s' "$json" | jq -e '
-    (.secondmates | any(.[]; .id == "domain-alpha" and .state == "active_child_work"
-      and (.doing | contains("phase8")) and (.doing | contains("Phase 7 started") | not)))
-      and (.in_flight | any(.[]; .id == "domain-alpha" and (.doing | contains("phase8"))))
-  ' >/dev/null || fail "active child did not override stale parent event: $json"
+    (.secondmates | any(.[]; .id == "domain-alpha" and .state != "captain_decision"
+      and (.doing | contains("release A or B") | not)))
+      and (.decisions_open | any(.owner == "domain-alpha") | not)
+  ' >/dev/null || fail "status-only child decision leaked into Bearings: $json"
   canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
     "$ROOT/bin/fm-fleet-snapshot.sh" --json)
   printf '%s' "$canonical" | jq -e '
@@ -342,7 +474,7 @@ EOF
       and .endpoint.freshness == "fresh"
       and .endpoint.observed_at == "2026-07-11T18:00:00Z"
   ' >/dev/null || fail "child endpoint observation lacked bounded current freshness: $canonical"
-  pass "active child work overrides an old parent event with fresh endpoint evidence"
+  pass "Bearings excludes a status-only child decision"
 }
 
 test_structured_child_decision_reaches_captains_call() {
@@ -356,23 +488,25 @@ test_structured_child_decision_reaches_captains_call() {
 - [ ] phase8 - Sample rollout Phase 8 (repo: sample) (kind: ship) (since 2026-07-13)
 
 ## Queued
+- [ ] phase8-decision-release - Choose sample release (repo: sample) (kind: captain) (hold: captain release choice pending) (hold-kind: captain)
 
 ## Done
 - [x] phase7 - Sample rollout Phase 7 (repo: sample) (kind: ship) (done 2026-07-12)
 EOF
   fm_write_meta "$mate/state/phase8.meta" \
     "window=firstmate:fm-phase8" "worktree=$mate/projects/phase8" "project=sample" \
-    "harness=codex" "kind=ship" "mode=no-mistakes"
+    "harness=claude" "kind=ship" "mode=no-mistakes"
+  record_claude_state "$mate/state" phase8 idle
   printf 'needs-decision [key=release]: choose release A or B\n' > "$mate/state/phase8.status"
   fakebin=$(make_fakebin "$home")
   json=$(run "$home" "$fakebin" --json)
   printf '%s' "$json" | jq -e '
     (.secondmates | any(.[]; .id == "domain-alpha" and .state == "captain_decision"))
-      and (.decisions_open | any(.[]; .id == "domain-alpha/phase8" and .key == "release"
-        and .verb == "needs-decision" and (.summary | contains("release A or B"))))
+      and (.decisions_open | any(.[]; .id == "domain-alpha/phase8-decision-release"
+        and .key == "phase8-decision-release" and .verb == "captain-hold"))
       and (.in_flight | any(.[]; .id == "domain-alpha") | not)
-  ' >/dev/null || fail "structured child decision did not reach Boss's Call: $json"
-  pass "a real structured child decision reaches Boss's Call"
+  ' >/dev/null || fail "structured child captain hold did not reach Captain Call: $json"
+  pass "a structured child captain hold reaches Captain's Call"
 }
 
 make_valid_secondmate_home() {  # <id> <home>
@@ -394,20 +528,33 @@ append_secondmate_registry() {  # <parent> <id> <home>
     "$2" "$3" >> "$1/data/secondmates.md"
 }
 
+append_landed_row() {  # <secondmate-home> <id> <title> <date>
+  printf -- '- [x] %s - %s (repo: firstmate) (kind: ship) (merged %s)\n' \
+    "$2" "$3" "$4" >> "$1/data/backlog.md"
+}
+
+make_landed_secondmate() {  # <parent> <id>
+  local parent=$1 id=$2 mate
+  mate="$TMP_ROOT/$(basename "$parent")-$id-home"
+  make_valid_secondmate_home "$id" "$mate"
+  append_secondmate_registry "$parent" "$id" "$mate"
+  printf '%s\n' "$mate"
+}
+
 write_parent_secondmate_event() {  # <parent> <id> <home> <note>
   fm_write_secondmate_meta "$1/state/$2.meta" "$3" "firstmate:fm-$2" sample
   printf 'working [key=%s]: %s\n' "$2" "$4" > "$1/state/$2.status"
 }
 
 test_bad_secondmate_homes_never_revive_parent_work() {
-  local home fakebin missing invalid unreadable malformed timedout wt json
+  local home fakebin missing invalid unreadable malformed unknown_child wt json
   home=$(make_home bad-homes)
   : > "$home/data/secondmates.md"
   missing="$TMP_ROOT/missing-home"
   invalid="$TMP_ROOT/invalid-home"
   unreadable="$TMP_ROOT/unreadable-home"
   malformed="$TMP_ROOT/malformed-home"
-  timedout="$TMP_ROOT/timedout-home"
+  unknown_child="$TMP_ROOT/unknown-child-home"
 
   append_secondmate_registry "$home" missing "$missing"
 
@@ -426,34 +573,73 @@ test_bad_secondmate_homes_never_revive_parent_work() {
   append_secondmate_registry "$home" malformed "$malformed"
   write_parent_secondmate_event "$home" malformed "$malformed" "old malformed work"
 
-  make_valid_secondmate_home timedout "$timedout"
-  wt="$timedout/projects/slow"
+  make_valid_secondmate_home unknown-child "$unknown_child"
+  wt="$unknown_child/projects/slow"
   fm_git_init_commit "$wt"
   git -C "$wt" checkout -q -b fm/slow
-  printf '## In flight\n- [ ] slow - Slow child (repo: sample) (kind: ship) (since 2026-07-13)\n\n## Queued\n\n## Done\n' > "$timedout/data/backlog.md"
-  fm_write_meta "$timedout/state/slow.meta" \
+  printf '## In flight\n- [ ] slow - Slow child (repo: sample) (kind: ship) (since 2026-07-13)\n\n## Queued\n\n## Done\n' > "$unknown_child/data/backlog.md"
+  fm_write_meta "$unknown_child/state/slow.meta" \
     "window=firstmate:fm-slow" "worktree=$wt" "project=sample" \
     "harness=codex" "kind=ship" "mode=no-mistakes"
-  append_secondmate_registry "$home" timedout "$timedout"
-  write_parent_secondmate_event "$home" timedout "$timedout" "old timed work"
+  append_secondmate_registry "$home" unknown-child "$unknown_child"
+  write_parent_secondmate_event "$home" unknown-child "$unknown_child" "old unknown work"
 
   fakebin=$(make_fakebin "$home")
-  json=$(FAKE_NM_SLEEP=1 FM_SNAPSHOT_SECONDMATE_TIMEOUT=1 run "$home" "$fakebin" --json)
+  json=$(run "$home" "$fakebin" --json)
   chmod 700 "$unreadable/data"
   printf '%s' "$json" | jq -e '
     (.secondmates | length) == 5
       and all(.secondmates[]; .state == "unknown")
-      and (.in_flight | map(.id) | all(. != "invalid" and . != "unreadable" and . != "malformed" and . != "timedout"))
+      and (.in_flight | map(.id) | all(. != "invalid" and . != "unreadable" and . != "malformed" and . != "unknown-child"))
       and (.secondmates | any(.[]; .id == "missing" and .provenance == "unknown"
         and .freshness == "unknown" and (.reason | contains("invalid home"))))
-      and ([.secondmates[] | select(.id != "missing")]
+      and ([.secondmates[] | select(.id == "invalid" or .id == "unreadable" or .id == "malformed")]
         | all(.provenance == "parent-event-fallback" and .freshness == "historical-event"))
+      and (.secondmates | any(.[]; .id == "unknown-child" and .provenance == "structured-home"
+        and .freshness == "fresh"))
       and (.secondmates | any(.[]; .id == "invalid" and (.reason | contains("marked for"))))
       and (.secondmates | any(.[]; .id == "unreadable" and (.reason | test("invalid home|unreadable"))))
       and (.secondmates | any(.[]; .id == "malformed" and (.reason | contains("unstructured current backlog row"))))
-      and (.secondmates | any(.[]; .id == "timedout" and (.reason | contains("timed out"))))
+      and (.secondmates | any(.[]; .id == "unknown-child" and (.reason | contains("child current state unavailable"))))
+      and ([.secondmate_reconcile[].id] == ["malformed", "unknown-child"])
+      and (.secondmate_reconcile[0].kind == "unstructured_current")
+      and (.secondmate_reconcile[1].kind == "child_current_unavailable")
   ' >/dev/null || fail "bad home outcomes revived stale work or lacked provenance: $json"
-  pass "missing, invalid, unreadable, malformed, and timed-out homes stay explicit unknowns"
+  pass "missing, invalid, unreadable, malformed, and unavailable-child homes stay explicit unknowns"
+}
+
+test_oversized_secondmate_summary_stays_strict_unknown() {
+  local home mate fakebin json i
+  home=$(make_home oversized-home)
+  mate="$TMP_ROOT/oversized-secondmate-home"
+  make_valid_secondmate_home oversized "$mate"
+  append_secondmate_registry "$home" oversized "$mate"
+  fm_write_secondmate_meta "$home/state/oversized.meta" "$mate" "firstmate:fm-oversized" sample
+  printf 'working [key=old]: stale parent activity\n' > "$home/state/oversized.status"
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+
+## Done
+EOF
+  i=1
+  while [ "$i" -le 30 ]; do
+    printf -- '- [x] landed-%02d - Bounded landed fixture %02d (repo: sample) (kind: ship) (done 2026-07-01)\n' \
+      "$i" "$i" >> "$mate/data/backlog.md"
+    i=$((i + 1))
+  done
+  fakebin=$(make_fakebin "$home")
+  json=$(FM_SNAPSHOT_SECONDMATE_MAX_BYTES=512 run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    (.secondmates | any(.id == "oversized" and .state == "unknown"
+      and .provenance == "parent-event-fallback"
+      and (.reason | contains("exceeded byte limit"))))
+      and (.in_flight | any(.id == "oversized") | not)
+      and (.decisions_open | any(.owner == "oversized") | not)
+      and (.landed | any(.owner == "oversized") | not)
+  ' >/dev/null || fail "oversized summary revived or retained unvalidated surfaces: $json"
+  pass "oversized ledgers stay strict unknown"
 }
 
 test_secondmate_and_child_bounds_are_disclosed() {
@@ -475,12 +661,14 @@ test_secondmate_and_child_bounds_are_disclosed() {
     printf -- '- [ ] %s - Active %s (repo: sample) (kind: ship) (since 2026-07-13)\n' "$child" "$child" >> "$mate/data/backlog.md"
     fm_write_meta "$mate/state/$child.meta" \
       "window=firstmate:fm-$child" "worktree=$mate/projects/$child" "project=sample" \
-      "harness=codex" "kind=ship" "mode=no-mistakes"
+      "harness=claude" "kind=ship" "mode=no-mistakes"
+    record_claude_state "$mate/state" "$child" busy
     printf 'working [key=%s]: active child %s\n' "$child" "$i" > "$mate/state/$child.status"
     i=$((i + 1))
   done
   printf '\n## Queued\n\n## Done\n' >> "$mate/data/backlog.md"
   fakebin=$(make_fakebin "$home")
+  PATH="$fakebin:$PATH" FM_SNAPSHOT_SECONDMATE_CHILDREN=2 refresh_local_secondmate_ledgers "$home"
   canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
     FM_SNAPSHOT_SECONDMATES=2 FM_SNAPSHOT_SECONDMATE_CHILDREN=2 "$ROOT/bin/fm-fleet-snapshot.sh" --json)
   printf '%s' "$canonical" | jq -e '
@@ -496,9 +684,11 @@ test_secondmate_and_child_bounds_are_disclosed() {
     run "$home" "$fakebin" --json)
   printf '%s' "$json" | jq -e '
     (.secondmates | length) == 1
+      and ([.in_flight[].id] | sort) == ["a/child-1", "a/child-2"]
+      and ([.omitted[].surface] | any(test("secondmate a active children omitted by snapshot bound: 1")))
       and ([.omitted[].surface] | any(test("secondmates showing 1 of 2")))
       and ([.omitted[].surface] | any(test("registered secondmates omitted by snapshot bound: 1")))
-  ' >/dev/null || fail "bearings secondmate bound was not disclosed: $json"
+  ' >/dev/null || fail "bearings secondmate or child bound was not disclosed: $json"
   expanded=$(FM_SNAPSHOT_SECONDMATE_CHILDREN=2 FM_BEARINGS_SECONDMATES=1 \
     run "$home" "$fakebin" --json --all-secondmates)
   printf '%s' "$expanded" | jq -e '
@@ -517,6 +707,7 @@ test_parent_decision_is_untrusted_contradiction_only() {
   fm_write_secondmate_meta "$home/state/authority.meta" "$mate" "firstmate:fm-authority" sample
   printf 'needs-decision [key=stale]: old parent question\n' > "$home/state/authority.status"
   fakebin=$(make_fakebin "$home")
+  refresh_local_secondmate_ledgers "$home"
   canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
     "$ROOT/bin/fm-fleet-snapshot.sh" --json)
   printf '%s' "$canonical" | jq -e '
@@ -584,9 +775,11 @@ EOF
 EOF
   fm_write_meta "$decision/state/$child.meta" \
     "window=firstmate:fm-$child" "worktree=$decision/projects/$child" "project=sample" \
-    "harness=codex" "kind=ship" "mode=no-mistakes"
+    "harness=claude" "kind=ship" "mode=no-mistakes"
+  record_claude_state "$decision/state" "$child" idle
   printf 'needs-decision [key=live-route]: choose the current route\n' > "$decision/state/$child.status"
   fakebin=$(make_fakebin "$home")
+  refresh_local_secondmate_ledgers "$home"
   canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
     "$ROOT/bin/fm-fleet-snapshot.sh" --json)
   printf '%s' "$canonical" | jq -e '
@@ -636,9 +829,11 @@ test_nonprogressing_child_states_are_explicit() {
 EOF
   fm_write_meta "$mate/state/parked.meta" \
     "window=firstmate:fm-parked" "worktree=$mate/projects/parked" "project=sample" \
-    "harness=codex" "kind=ship" "mode=no-mistakes"
+    "harness=claude" "kind=ship" "mode=no-mistakes"
+  record_claude_state "$mate/state" parked idle
   printf 'needs-decision [key=parked]: choose a route\n' > "$mate/state/parked.status"
   fakebin=$(make_fakebin "$home")
+  refresh_local_secondmate_ledgers "$home"
   canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
     "$ROOT/bin/fm-fleet-snapshot.sh" --json)
   printf '%s' "$canonical" | jq -e '
@@ -654,14 +849,19 @@ EOF
 
 ## Done
 EOF
+  refresh_local_secondmate_ledgers "$home"
   canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
     "$ROOT/bin/fm-fleet-snapshot.sh" --json)
   printf '%s' "$canonical" | jq -e '
     .secondmate_current.records[] | select(.id == "states")
-    | .current.state == "unknown"
+    | .current.state == "captain_decision"
       and (.current.reason | contains("live child state has no in-flight backlog item"))
       and (.current.reason | contains("parked=parked"))
-  ' >/dev/null || fail "unowned held child was silently dropped: $canonical"
+      and .provenance.selected == "structured-home"
+      and .provenance.trust == "partial-structured"
+      and .invalidity == {kind:"unowned_current",ids:["parked"]}
+      and [.decisions_open[].key] == ["parked"]
+  ' >/dev/null || fail "unowned held child lost its classification or decisions: $canonical"
   cat > "$mate/data/backlog.md" <<'EOF'
 ## In flight
 - [ ] done - Done child still in flight (repo: sample) (kind: ship) (since 2026-07-11)
@@ -673,22 +873,28 @@ EOF
 EOF
   fm_write_meta "$mate/state/done.meta" \
     "window=firstmate:fm-done" "worktree=$mate/projects/done" "project=sample" \
-    "harness=codex" "kind=ship" "mode=no-mistakes"
+    "harness=claude" "kind=ship" "mode=no-mistakes"
   fm_write_meta "$mate/state/failed.meta" \
     "window=firstmate:fm-failed" "worktree=$mate/projects/failed" "project=sample" \
-    "harness=codex" "kind=ship" "mode=no-mistakes"
+    "harness=claude" "kind=ship" "mode=no-mistakes"
+  record_claude_state "$mate/state" "done" idle
+  record_claude_state "$mate/state" failed idle
   printf 'done: complete\n' > "$mate/state/done.status"
   printf 'failed: stopped\n' > "$mate/state/failed.status"
   rm "$mate/state/parked.meta" "$mate/state/parked.status"
+  refresh_local_secondmate_ledgers "$home"
   canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
     "$ROOT/bin/fm-fleet-snapshot.sh" --json)
   printf '%s' "$canonical" | jq -e '
     .secondmate_current.records[] | select(.id == "states")
-    | .current.state == "unknown"
+    | .current.state == "no_active_work"
       and (.current.reason | contains("terminal child state"))
       and (.current.reason | contains("done=done"))
       and (.current.reason | contains("failed=failed"))
-  ' >/dev/null || fail "terminal in-flight child states were silently dropped: $canonical"
+      and .provenance.selected == "structured-home"
+      and .provenance.trust == "partial-structured"
+      and .invalidity == {kind:"terminal_in_flight",ids:["done","failed"]}
+  ' >/dev/null || fail "terminal in-flight rows discarded the readable home: $canonical"
   pass "nonprogressing child states are explicit and inconsistent terminal rows invalidate"
 }
 
@@ -724,6 +930,7 @@ test_registry_unavailability_and_bounds_are_explicit() {
     append_secondmate_registry "$home" "$id" "$mate"
   done
   fakebin=$(make_fakebin "$home")
+  refresh_local_secondmate_ledgers "$home"
   canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
     FM_SNAPSHOT_REGISTRY_RECORDS=2 "$ROOT/bin/fm-fleet-snapshot.sh" --json)
   printf '%s' "$canonical" | jq -e '
@@ -764,6 +971,7 @@ test_registry_unavailability_and_bounds_are_explicit() {
   make_valid_secondmate_home z-hidden "$mate"
   append_secondmate_registry "$home" z-hidden "$mate"
   fm_write_secondmate_meta "$home/state/z-hidden.meta" "$mate" "firstmate:fm-z-hidden" sample
+  refresh_local_secondmate_ledgers "$home"
   canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
     FM_SNAPSHOT_REGISTRY_RECORDS=3 "$ROOT/bin/fm-fleet-snapshot.sh" --json)
   printf '%s' "$canonical" | jq -e '
@@ -802,8 +1010,11 @@ EOF
 }
 
 test_default_is_bounded_and_local_only() {
-  local home fakebin toon json
+  local home fakebin toon json backlog
   home=$(make_home bounded); write_fixture "$home"
+  backlog="$home/data/backlog.md"
+  awk '{if ($0 ~ /^- \[ \] ship-task /) sub(/ \(repo: firstmate\)/, ""); print}' \
+    "$backlog" > "$backlog.tmp" && mv "$backlog.tmp" "$backlog"
   fakebin=$(make_fakebin "$home"); : > "$home/net.log"
   toon=$(run "$home" "$fakebin")
   json=$(run "$home" "$fakebin" --json)
@@ -818,7 +1029,10 @@ test_default_is_bounded_and_local_only() {
   assert_contains "$toon" 'prs: "not_requested' "default must state PR checks were not requested"
   assert_contains "$toon" "live PR discovery + checks,\"--include-prs\"" "omitted must mark the dropped live-PR surface"
   # Valid JSON, correct schema.
-  printf '%s' "$json" | jq -e '.schema == "fm-bearings.v1"' >/dev/null || fail "json schema wrong"
+  printf '%s' "$json" | jq -e '
+    .schema == "fm-bearings.v1"
+      and (.in_flight | any(.id == "ship-task" and .repo == "firstmate"))
+  ' >/dev/null || fail "json schema or main Underway repository wrong: $json"
   pass "default output is bounded, local-only, and marks omitted surfaces"
 }
 
@@ -860,9 +1074,10 @@ test_open_decision_surfaces_end_to_end() {
   fakebin=$(make_fakebin "$home")
   json=$(run "$home" "$fakebin" --json)
   printf '%s' "$json" | jq -e '
-    .decisions_open | any(.[]; .id == "mate" and .key == "race" and .verb == "needs-decision")
-  ' >/dev/null || fail "a still-open decision masked by a later done must surface in decisions_open: $json"
-  pass "an open decision masked by a later event surfaces end-to-end"
+    .decisions_open | any(.[]; .id == "mate/mate-decision-race"
+      and .key == "mate-decision-race" and .verb == "captain-hold")
+  ' >/dev/null || fail "an authoritative captain hold must surface in decisions_open: $json"
+  pass "an authoritative captain hold surfaces end-to-end"
 }
 
 test_report_pointers_surface() {
@@ -888,6 +1103,52 @@ test_superseded_queued_item_dropped_by_default() {
   printf '%s' "$json" | jq -e '.gates | any(.[]; .id == "dead-gate")' >/dev/null \
     || fail "--all-queued must restore the superseded item"
   pass "superseded queued items are dropped by default and restored with --all-queued"
+}
+
+# The collapsed captain-call contract: any due, unblocked captain-held task is
+# Captain's Call whatever its kind; a date-deferred hold is a dated gate until
+# due; a prose-deferred hold leaves the default views with a disclosure; and
+# Recently Landed excludes only what closed while still held for the captain.
+test_collapsed_captain_call_deferral_and_landed() {
+  local home fakebin json
+  home=$(make_home collapsed-call)
+  mkdir -p "$home/data"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] work-gate - Captain-gated ship work (repo: firstmate) (kind: ship) (hold: captain go needed) (hold-kind: captain)
+- [ ] later-call - Deferred captain call (repo: firstmate) (kind: captain) (hold: revisit with the captain) (hold-kind: captain) (hold-until: 2026-08-01)
+- [ ] due-call - Due captain call (repo: firstmate) (kind: captain) (hold: overdue captain choice) (hold-kind: captain) (hold-until: 2026-07-11)
+- [ ] parked-call - Prose-parked captain call (repo: firstmate) (kind: ship) (hold: DEFERRED by captain revisit later) (hold-kind: captain)
+- [ ] external-gate - Externally held work (repo: firstmate) (kind: ship) (hold: upstream release pending) (hold-kind: external)
+
+## Done
+- [x] answered-call - Answered captain question (repo: firstmate) (kind: captain) (done 2026-07-10) (hold: captain choice pending) (hold-kind: captain)
+- [x] shipped-work - Ordinary landed work (repo: firstmate) (kind: ship) (merged 2026-07-10)
+EOF
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    (.decisions_open | any(.[]; .id == "work-gate"))
+      and (.decisions_open | any(.[]; .id == "due-call"))
+      and (.decisions_open | any(.[]; .id == "later-call") | not)
+      and (.decisions_open | any(.[]; .id == "parked-call") | not)
+      and (.decisions_open | any(.[]; .id == "external-gate") | not)
+      and (.gates | any(.[]; .id == "later-call" and (.reason | startswith("until 2026-08-01"))))
+      and (.gates | any(.[]; .id == "work-gate") | not)
+      and (.gates | any(.[]; .id == "parked-call") | not)
+      and (.gates | any(.[]; .id == "external-gate"))
+      and (.landed | any(.[]; .id == "shipped-work"))
+      and (.landed | any(.[]; .id == "answered-call") | not)
+      and (.omitted | any(.[]; .surface | startswith("captain holds marked deferred")))
+  ' >/dev/null || fail "the collapsed captain-call projection is wrong: $json"
+  json=$(run "$home" "$fakebin" --json --all-decisions --all-queued)
+  printf '%s' "$json" | jq -e '
+    (.decisions_open | any(.[]; .id == "parked-call"))
+      and (.gates | any(.[]; .id == "parked-call") | not)
+  ' >/dev/null || fail "--all-decisions must reveal the prose-deferred call: $json"
+  pass "captain-held tasks of any kind reach Captain's Call, deferral is honored, and landed excludes answered calls"
 }
 
 test_include_prs_is_the_only_fetch_path() {
@@ -927,7 +1188,11 @@ test_perl_fallback_bounds_github_call() {
   fakebin=$(make_fakebin "$home")
   toolbin="$home/toolbin"
   mkdir -p "$toolbin"
-  for cmd in bash dirname basename jq date sed git grep tail cut tr head sort wc perl sleep cat find; do
+  for cmd in bash dirname basename jq date sed git grep tail cut tr head sort wc perl sleep cat find mktemp rm mkdir chmod mv cp awk; do
+    ln -s "$(command -v "$cmd")" "$toolbin/$cmd"
+  done
+  for cmd in shasum sha256sum; do
+    command -v "$cmd" >/dev/null 2>&1 || continue
     ln -s "$(command -v "$cmd")" "$toolbin/$cmd"
   done
   started=$(date +%s)
@@ -950,6 +1215,7 @@ write_large_fixture() {  # <home> <count>
     mkdir -p "$home/projects/$id" "$home/data/$id"
     printf '# Report\n' > "$home/data/$id/report.md"
     printf -- '- [ ] gate-%s - Gate %s blocked-by: task-%s (repo: repo-%s) (kind: ship)\n' "$i" "$i" "$i" "$i" >> "$home/data/backlog.md"
+    printf -- '- [ ] decision-%s - Decision %s (repo: repo-%s) (kind: captain) (hold: captain choice pending) (hold-kind: captain)\n' "$i" "$i" "$i" >> "$home/data/backlog.md"
     fm_write_meta "$home/state/$id.meta" \
       "window=firstmate:fm-$id" \
       "worktree=$home/projects/$id" \
@@ -1100,6 +1366,166 @@ test_landed_includes_secondmate_home_merges() {
   pass "landed includes secondmate-managed merges alongside main-home merges"
 }
 
+test_landed_default_balances_dominant_and_sparse_homes() {
+  local home dominant sparse_a sparse_b sparse_c fakebin json i actual expected
+  home=$(make_home landed-balanced-default)
+  : > "$home/data/secondmates.md"
+  printf '## Done\n' > "$home/data/backlog.md"
+  dominant=$(make_landed_secondmate "$home" dominant)
+  sparse_a=$(make_landed_secondmate "$home" sparse-a)
+  sparse_b=$(make_landed_secondmate "$home" sparse-b)
+  sparse_c=$(make_landed_secondmate "$home" sparse-c)
+  i=1
+  while [ "$i" -le 12 ]; do
+    append_landed_row "$dominant" "$(printf 'dominant-landed-%02d' "$i")" \
+      "$(printf 'Dominant landed %02d' "$i")" "$(printf '2026-07-%02d' "$((31 - i))")"
+    i=$((i + 1))
+  done
+  i=1
+  while [ "$i" -le 2 ]; do
+    append_landed_row "$sparse_a" "$(printf 'sparse-a-landed-%02d' "$i")" \
+      "$(printf 'Sparse A landed %02d' "$i")" "$(printf '2026-07-%02d' "$((12 - i))")"
+    append_landed_row "$sparse_b" "$(printf 'sparse-b-landed-%02d' "$i")" \
+      "$(printf 'Sparse B landed %02d' "$i")" "$(printf '2026-07-%02d' "$((10 - i))")"
+    append_landed_row "$sparse_c" "$(printf 'sparse-c-landed-%02d' "$i")" \
+      "$(printf 'Sparse C landed %02d' "$i")" "$(printf '2026-07-%02d' "$((8 - i))")"
+    i=$((i + 1))
+  done
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  actual=$(printf '%s' "$json" | jq -r '.landed[] | "\(.owner)/\(.id)"')
+  expected='dominant/dominant-landed-01
+sparse-a/sparse-a-landed-01
+sparse-b/sparse-b-landed-01
+sparse-c/sparse-c-landed-01
+dominant/dominant-landed-02
+sparse-a/sparse-a-landed-02'
+  [ "$actual" = "$expected" ] || fail "default landed selection was not balanced across homes: $actual"
+  printf '%s' "$json" | jq -e '
+    (.landed | length) == 6
+      and ([.landed[].owner] | unique | length) == 4
+      and ([.omitted[].surface] | any(test("landed showing 6 of 12")))
+  ' >/dev/null || fail "balanced landed default did not preserve cap disclosure: $json"
+  pass "default landed selection balances one dominant home with sparse homes"
+}
+
+test_landed_default_refills_capacity_after_sparse_homes_exhaust() {
+  local home dominant sparse fakebin json actual expected i
+  home=$(make_home landed-sparse-refill)
+  : > "$home/data/secondmates.md"
+  printf '## Done\n' > "$home/data/backlog.md"
+  dominant=$(make_landed_secondmate "$home" dominant)
+  sparse=$(make_landed_secondmate "$home" sparse)
+  i=1
+  while [ "$i" -le 5 ]; do
+    append_landed_row "$dominant" "$(printf 'dominant-landed-%02d' "$i")" \
+      "$(printf 'Dominant landed %02d' "$i")" "$(printf '2026-07-%02d' "$((20 - i))")"
+    i=$((i + 1))
+  done
+  append_landed_row "$sparse" sparse-landed-01 "Sparse landed 01" 2026-07-01
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  actual=$(printf '%s' "$json" | jq -r '.landed[] | "\(.owner)/\(.id)"')
+  expected='dominant/dominant-landed-01
+sparse/sparse-landed-01
+dominant/dominant-landed-02
+dominant/dominant-landed-03
+dominant/dominant-landed-04
+dominant/dominant-landed-05'
+  [ "$actual" = "$expected" ] || fail "sparse homes wasted landed capacity: $actual"
+  pass "landed selection refills capacity after sparse homes exhaust"
+}
+
+test_landed_default_uses_deterministic_home_order_when_homes_exceed_cap() {
+  local home mate fakebin json actual expected i id
+  home=$(make_home landed-home-order)
+  : > "$home/data/secondmates.md"
+  printf '## Done\n' > "$home/data/backlog.md"
+  i=1
+  while [ "$i" -le 8 ]; do
+    id=$(printf 'home-%02d' "$i")
+    mate=$(make_landed_secondmate "$home" "$id")
+    append_landed_row "$mate" "$id-landed-01" "$id landed 01" 2026-07-10
+    i=$((i + 1))
+  done
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  actual=$(printf '%s' "$json" | jq -r '.landed[] | "\(.owner)/\(.id)"')
+  expected='home-01/home-01-landed-01
+home-02/home-02-landed-01
+home-03/home-03-landed-01
+home-04/home-04-landed-01
+home-05/home-05-landed-01
+home-06/home-06-landed-01'
+  [ "$actual" = "$expected" ] || fail "landed home-order tie was not deterministic: $actual"
+  printf '%s' "$json" | jq -e '
+    ([.omitted[].surface] | any(test("landed showing 6 of 8")))
+  ' >/dev/null || fail "more-homes-than-cap omission was not disclosed: $json"
+  pass "landed selection uses deterministic home order when homes exceed the cap"
+}
+
+test_landed_default_preserves_internal_order_for_ties() {
+  local home tie_a tie_b fakebin json actual expected
+  home=$(make_home landed-ties)
+  : > "$home/data/secondmates.md"
+  printf '## Done\n' > "$home/data/backlog.md"
+  tie_a=$(make_landed_secondmate "$home" tie-a)
+  tie_b=$(make_landed_secondmate "$home" tie-b)
+  append_landed_row "$tie_b" tie-b-a "Tie B A" 2026-07-10
+  append_landed_row "$tie_b" tie-b-z "Tie B Z" 2026-07-10
+  append_landed_row "$tie_a" tie-a-a "Tie A A" 2026-07-10
+  append_landed_row "$tie_a" tie-a-z "Tie A Z" 2026-07-10
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  actual=$(printf '%s' "$json" | jq -r '.landed[] | "\(.owner)/\(.id)"')
+  expected='tie-a/tie-a-z
+tie-b/tie-b-z
+tie-a/tie-a-a
+tie-b/tie-b-a'
+  [ "$actual" = "$expected" ] || fail "landed tie ordering changed: $actual"
+  pass "landed selection preserves deterministic home and internal tie ordering"
+}
+
+test_landed_default_handles_no_landed_items() {
+  local home fakebin json
+  home=$(make_home landed-empty)
+  : > "$home/data/secondmates.md"
+  printf '## Done\n' > "$home/data/backlog.md"
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    (.landed | length) == 0
+      and ([.omitted[].surface] | any(test("landed")) | not)
+  ' >/dev/null || fail "empty landed set was not handled cleanly: $json"
+  pass "landed selection handles no landed items"
+}
+
+test_all_landed_keeps_complete_global_order() {
+  local home alpha beta fakebin json actual expected
+  home=$(make_home landed-all-order)
+  : > "$home/data/secondmates.md"
+  printf '## Done\n' > "$home/data/backlog.md"
+  alpha=$(make_landed_secondmate "$home" alpha)
+  beta=$(make_landed_secondmate "$home" beta)
+  append_landed_row "$alpha" alpha-old "Alpha old" 2026-07-01
+  append_landed_row "$alpha" alpha-new "Alpha new" 2026-07-09
+  append_landed_row "$beta" beta-new "Beta new" 2026-07-10
+  append_landed_row "$beta" beta-mid "Beta mid" 2026-07-05
+  fakebin=$(make_fakebin "$home")
+  json=$(FM_BEARINGS_LANDED=1 run "$home" "$fakebin" --json --all-landed)
+  actual=$(printf '%s' "$json" | jq -r '.landed[] | "\(.owner)/\(.id)"')
+  expected='beta/beta-new
+alpha/alpha-new
+beta/beta-mid
+alpha/alpha-old'
+  [ "$actual" = "$expected" ] || fail "--all-landed global order changed: $actual"
+  printf '%s' "$json" | jq -e '
+    (.landed | length) == 4
+      and ([.omitted[].surface] | any(test("landed|snapshot layer")) | not)
+  ' >/dev/null || fail "--all-landed no longer revealed the complete landed set: $json"
+  pass "--all-landed keeps the complete global landed output"
+}
+
 # The roll-up stays bounded: a per-home cap and an overall cap, both disclosed in
 # omitted[], with --all-landed as the counted expansion knob. This also covers the
 # previously-silent main-home landed truncation.
@@ -1151,21 +1577,22 @@ test_live_blocker_is_not_charted_queue_work() {
   local home fakebin json
   home=$(make_home live-blocker); write_fixture "$home"
   printf 'blocked [key=synthetic-dependency]: firstmate can refresh the synthetic token\n' > "$home/state/ship-task.status"
+  record_claude_state "$home/state" ship-task idle
   fakebin=$(make_fakebin "$home")
   json=$(run "$home" "$fakebin" --json)
   printf '%s' "$json" | jq -e '
     (.in_flight | any(.[]; .id == "ship-task" and .state == "blocked"))
-      and (.decisions_open | any(.[]; .id == "ship-task" and .verb == "blocked" and .key == "synthetic-dependency"))
+      and (.decisions_open | any(.[]; .id == "ship-task") | not)
       and (.gates | any(.[]; .id == "ship-task") | not)
   ' >/dev/null || fail "live blocked work was projected as queued/deferred work: $json"
   pass "Bearings keeps a live blocker in structured live state and never converts it to Charted Next queue work"
 }
 
-# Boss's Call is populated only from the durable keyed open-decision set. The
+# Captain's Call is populated only from the durable keyed open-decision set. The
 # anti-leak guard: action-free highlights - a working task, a completed scout,
 # queued/gated items, landed work - must never surface as an open decision, so they
-# cannot leak into Boss's Call. The standard fixture has exactly one genuine open
-# decision (the secondmate's masked needs-decision).
+# cannot leak into Captain's Call. The standard fixture has exactly one genuine open
+# decision (the secondmate's structured captain hold).
 test_captains_call_anti_leak() {
   local home fakebin json canonical
   home=$(make_home anti-leak); write_fixture "$home"
@@ -1173,8 +1600,10 @@ test_captains_call_anti_leak() {
   json=$(run "$home" "$fakebin" --json)
   canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$ROOT/bin/fm-fleet-snapshot.sh" --json)
   jq -n -e --argjson bearings "$json" --argjson canonical "$canonical" '
-    (([$bearings.decisions_open[].id]
-      + [$canonical.tasks[] | select(.hints.pending_decision or .hints.blocked_event) | .id]) | unique) == ["mate"]
+    ([$bearings.decisions_open[].id] == ["mate/mate-decision-race"])
+      and ($canonical.secondmate_current.records[] | select(.id == "mate")
+        | (.decisions_open | any(.source == "status"))
+          and (.decisions_open | any(.source == "backlog")))
       and ([$bearings.decisions_open[].id] | index("ship-task") | not)
       and ([$bearings.decisions_open[].id] | index("scout-x") | not)
       and ([$bearings.decisions_open[].id] | index("external-wait") | not)
@@ -1182,45 +1611,687 @@ test_captains_call_anti_leak() {
       and ([$bearings.decisions_open[].id] | index("mate-landed") | not)
       and ([$bearings.decisions_open[].id] | index("live-gate") | not)
       and ([$bearings.decisions_open[].id] | index("dead-gate") | not)
-  ' >/dev/null || fail "only genuine open decisions may feed Boss's Call: $json"
-  pass "action-free items (working/done/queued/landed) do not leak into Boss's Call"
+  ' >/dev/null || fail "only genuine open decisions may feed Captain's Call: $json"
+  pass "action-free items (working/done/queued/landed) do not leak into Captain's Call"
 }
 
-# The /bearings skill is the one owner of the four-section chat-response contract.
-# Assert it states exactly the four fixed sections in order, each with its explicit
-# empty-state sentence, documents the At Anchor exclusion, and mandates a chat that is
-# materially shorter than and links to the report file.
-test_chat_contract_four_sections() {
-  local skill body headings report_headings expected
-  skill="$ROOT/.agents/skills/bearings/SKILL.md"
-  [ -f "$skill" ] || fail "bearings SKILL.md missing at $skill"
-  body=$(awk '/^## Chat-response contract$/{capture=1; next} capture && /^## /{exit} capture' "$skill")
-  headings=$(printf '%s\n' "$body" | sed -nE "s/^[0-9]+\. \*\*([^*]+)\*\*.*/\1/p")
-  expected=$(printf '%s\n' "Boss's Call" "Recently Landed" "Underway" "Charted Next")
-  [ "$headings" = "$expected" ] || fail "chat contract must contain exactly four numbered sections in fixed order, got: $headings"
-  assert_contains "$body" "Nothing needs your action right now" "Boss's Call empty-state sentence"
-  assert_contains "$body" "No recent completions are in the current baseline" "Recently Landed empty-state sentence"
-  assert_contains "$body" "Nothing is underway" "Underway empty-state sentence"
-  assert_contains "$body" "Nothing is queued" "Charted Next empty-state sentence"
-  report_headings=$(sed -nE 's/^   - \*\*(Boss.s Call|Recently Landed|Underway|Charted Next)\*\*.*/\1/p' "$skill")
-  [ "$report_headings" = "$expected" ] || fail "detailed report contract must contain the same four complete sections, got: $report_headings"
-  grep -Eq 'since the (prior|last) report|Nothing has landed since|unchanged delta' "$skill" \
-    && fail "bearings contract still contains prior-report delta wording"
-  # shellcheck disable=SC2016 # Backticks are literal Markdown in the expected text.
-  assert_contains "$(cat "$skill")" 'Never read an earlier `data/status-report-*.md`' "prior reports must not influence current output"
-  assert_contains "$(cat "$skill")" "bounded current recent-completions baseline" "Recently Landed must be a current baseline"
-  assert_contains "$body" "no At Anchor section" "the At Anchor exclusion must be documented"
-  assert_contains "$body" "materially shorter" "the chat must be materially shorter than the report file"
-  assert_contains "$body" "links to" "the chat must link to the report file"
-  pass "the /bearings skill states the four-section chat contract in order, with empty-states and the At Anchor exclusion"
+# R1: main-home orphan in-flight and unstructured current rows must not vanish
+# silently. Meta remains the sole live-work inventory; disclosure is via
+# main_inventory + omitted[] + a Charted Next gate line, never fake Underway.
+test_main_orphan_in_flight_is_disclosed_not_invented() {
+  local home fakebin json canonical
+  home=$(make_home main-orphan)
+  : > "$home/data/secondmates.md"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] only-orphan - Structured in flight without meta (repo: firstmate) (kind: ship) (since 2026-07-11)
+
+## Queued
+
+## Done
+EOF
+  fakebin=$(make_fakebin "$home")
+  canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
+    "$ROOT/bin/fm-fleet-snapshot.sh" --json)
+  printf '%s' "$canonical" | jq -e '
+    .main_inventory.valid == false
+      and .main_inventory.reason == "in-flight backlog item has no child metadata"
+      and (.main_inventory.orphan_in_flight == ["only-orphan"])
+      and .main_inventory.unstructured_current_count == 0
+      and (.tasks | length) == 0
+  ' >/dev/null || fail "canonical main inventory missed orphan: $canonical"
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    (.in_flight | length) == 0
+      and ([.in_flight[].id] | index("only-orphan") | not)
+      and ([.decisions_open[].id] | index("only-orphan") | not)
+      and (.gates | any(.id == "(main-inventory)"
+        and (.title | contains("in-flight backlog item has no child metadata"))))
+      and (.omitted | any(.surface == "main in-flight backlog item(s) have no child metadata: 1"))
+  ' >/dev/null || fail "orphan in-flight was invented or not disclosed: $json"
+  pass "main orphan in-flight stays out of Underway and is disclosed in omitted/gates"
 }
 
+test_main_unstructured_current_is_disclosed_with_structured_sibling() {
+  local home fakebin json canonical
+  home=$(make_home main-unstructured)
+  : > "$home/data/secondmates.md"
+  mkdir -p "$home/projects/structured-ship"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+this current row is not structured
+- [ ] structured-ship - Visible structured sibling (repo: firstmate) (kind: ship) (since 2026-07-11)
+
+## Queued
+another free-form note without checkbox
+- [ ] structured-queued - Structured queued (repo: firstmate) (kind: ship)
+
+## Done
+EOF
+  fm_write_meta "$home/state/structured-ship.meta" \
+    "window=firstmate:fm-structured-ship" \
+    "worktree=$home/projects/structured-ship" \
+    "project=firstmate" \
+    "harness=codex" \
+    "kind=ship" \
+    "mode=no-mistakes"
+  printf 'working: structured sibling still projects\n' > "$home/state/structured-ship.status"
+  fakebin=$(make_fakebin "$home")
+  canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
+    "$ROOT/bin/fm-fleet-snapshot.sh" --json)
+  printf '%s' "$canonical" | jq -e '
+    .main_inventory.valid == false
+      and .main_inventory.reason == "unstructured current backlog row"
+      and .main_inventory.unstructured_current_count == 2
+      and (.main_inventory.orphan_in_flight | length) == 0
+  ' >/dev/null || fail "canonical main inventory missed unstructured current: $canonical"
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    ([.in_flight[].id] == ["structured-ship"])
+      and ([.gates[].id] | index("structured-queued") != null)
+      and (.gates | any(.id == "(main-inventory)"
+        and (.title | contains("unstructured current backlog row"))))
+      and (.omitted | any(.surface == "main unstructured current backlog row(s): 2"))
+      and ([.decisions_open[].id] | index("(main-inventory)") | not)
+  ' >/dev/null || fail "unstructured current not disclosed or structured sibling lost: $json"
+  pass "main unstructured current is disclosed while structured siblings still project"
+}
+
+test_main_orphan_counterfactual_meta_clears_inventory_warning() {
+  local home fakebin json_before json_after
+  home=$(make_home main-orphan-counterfactual)
+  : > "$home/data/secondmates.md"
+  mkdir -p "$home/projects/orphan-ship"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] orphan-ship - Gains meta in counterfactual (repo: firstmate) (kind: ship) (since 2026-07-11)
+- [ ] visible-ship - Already live (repo: firstmate) (kind: ship) (since 2026-07-11)
+
+## Queued
+- [ ] queued-ship - Ordinary queue (repo: firstmate) (kind: ship)
+
+## Done
+EOF
+  fm_write_meta "$home/state/visible-ship.meta" \
+    "window=firstmate:fm-visible-ship" \
+    "worktree=$home/projects/orphan-ship" \
+    "project=firstmate" \
+    "harness=codex" \
+    "kind=ship" \
+    "mode=no-mistakes"
+  printf 'working: visible sibling\n' > "$home/state/visible-ship.status"
+  fakebin=$(make_fakebin "$home")
+  json_before=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json_before" | jq -e '
+    ([.in_flight[].id] == ["visible-ship"])
+      and ([.in_flight[].id] | index("orphan-ship") | not)
+      and (.omitted | any(.surface == "main in-flight backlog item(s) have no child metadata: 1"))
+      and (.gates | any(.id == "(main-inventory)"))
+      and ([.gates[].id] | index("queued-ship") != null)
+  ' >/dev/null || fail "pre-meta orphan fixture failed: $json_before"
+  fm_write_meta "$home/state/orphan-ship.meta" \
+    "window=firstmate:fm-orphan-ship" \
+    "worktree=$home/projects/orphan-ship" \
+    "project=firstmate" \
+    "harness=codex" \
+    "kind=ship" \
+    "mode=no-mistakes"
+  printf 'working: orphan now has meta\n' > "$home/state/orphan-ship.status"
+  json_after=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json_after" | jq -e '
+    ([.in_flight[].id] | sort) == ["orphan-ship", "visible-ship"]
+      and ([.omitted[].surface] | any(test("main in-flight backlog item")) | not)
+      and ([.gates[].id] | index("(main-inventory)") | not)
+      and ([.decisions_open[].id] | index("orphan-ship") | not)
+  ' >/dev/null || fail "adding meta did not clear inventory warning or project orphan: $json_after"
+  pass "counterfactual meta clears main inventory warning and projects the live task"
+}
+
+seed_working_child() {  # <mate-home> <id> <doing> [repo]
+  local mate=$1 id=$2 doing=$3 repo=${4-sample} repo_field=
+  mkdir -p "$mate/projects/$id"
+  [ -z "$repo" ] || repo_field=" (repo: $repo)"
+  printf -- '- [ ] %s - %s%s (kind: ship) (since 2026-07-13)\n' \
+    "$id" "$doing" "$repo_field" >> "$mate/data/backlog.md"
+  fm_write_meta "$mate/state/$id.meta" \
+    "window=firstmate:fm-$id" "worktree=$mate/projects/$id" "project=sample" \
+    "harness=claude" "kind=ship" "mode=no-mistakes"
+  record_claude_state "$mate/state" "$id" busy
+  printf 'working: %s\n' "$doing" > "$mate/state/$id.status"
+}
+
+test_active_children_project_independent_of_home_captain_hold() {
+  local home mate fakebin json
+  home=$(make_home underway-hold-parent)
+  : > "$home/data/secondmates.md"
+  mate="$TMP_ROOT/underway-hold-home"
+  make_valid_secondmate_home busy-hold "$mate"
+  append_secondmate_registry "$home" busy-hold "$mate"
+  fakebin=$(make_fakebin "$home")
+
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+EOF
+  seed_working_child "$mate" child-a "first live child" ""
+  seed_working_child "$mate" child-b "second live child"
+  cat >> "$mate/data/backlog.md" <<'EOF'
+
+## Queued
+- [ ] release-call - Choose release route (repo: sample) (kind: captain) (hold: pick route A or B) (hold-kind: captain)
+
+## Done
+EOF
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    ([.in_flight[].id] | sort) == ["busy-hold/child-a", "busy-hold/child-b"]
+      and ([.in_flight[].state] | unique) == ["working"]
+      and ([.in_flight[].repo] | unique) == ["sample"]
+      and ([.in_flight[] | select(.id == "busy-hold")] | length) == 0
+      and ([.decisions_open[] | select(.id == "busy-hold/release-call"
+        and .verb == "captain-hold")] | length) == 1
+      and (.secondmates | any(.id == "busy-hold" and .state == "captain_decision"))
+  ' >/dev/null || fail "a captain hold hid active children from Underway: $json"
+
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] release-call - Choose release route (repo: sample) (kind: captain) (hold: pick route A or B) (hold-kind: captain)
+
+## Done
+EOF
+  rm -f "$mate/state/child-a.meta" "$mate/state/child-a.status" \
+    "$mate/state/child-b.meta" "$mate/state/child-b.status"
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    ([.in_flight[] | select(.id | startswith("busy-hold/"))] | length) == 0
+      and ([.decisions_open[] | select(.id == "busy-hold/release-call")] | length) == 1
+      and (.secondmates | any(.id == "busy-hold" and .state == "captain_decision"))
+  ' >/dev/null || fail "a hold-only home invented Underway rows: $json"
+
+  cat > "$mate/data/backlog.md" <<'EOF'
+## In flight
+EOF
+  seed_working_child "$mate" child-a "first live child"
+  seed_working_child "$mate" child-b "second live child"
+  cat >> "$mate/data/backlog.md" <<'EOF'
+
+## Queued
+
+## Done
+EOF
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    ([.in_flight[].id] | sort) == ["busy-hold/child-a", "busy-hold/child-b"]
+      and ([.decisions_open[] | select(.owner == "busy-hold")] | length) == 0
+      and (.secondmates | any(.id == "busy-hold" and .state == "active_child_work"))
+  ' >/dev/null || fail "active-children-only Underway projection changed: $json"
+  pass "active children reach Underway independently of a home captain hold"
+}
+
+test_mixed_secondmate_roles_partial_state_and_captain_readiness() {
+  local home fakebin hibit wheel sshhip ha canonical json
+  home=$(make_home mixed-domain-regressions)
+  : > "$home/data/secondmates.md"
+  hibit="$TMP_ROOT/mixed-hibit-home"
+  wheel="$TMP_ROOT/mixed-wheel-home"
+  sshhip="$TMP_ROOT/mixed-sshhip-home"
+  ha="$TMP_ROOT/mixed-ha-home"
+  make_valid_secondmate_home hibit "$hibit"
+  make_valid_secondmate_home wheel "$wheel"
+  make_valid_secondmate_home sshhip "$sshhip"
+  make_valid_secondmate_home home-assistant "$ha"
+  append_secondmate_registry "$home" hibit "$hibit"
+  append_secondmate_registry "$home" wheel "$wheel"
+  append_secondmate_registry "$home" sshhip "$sshhip"
+  append_secondmate_registry "$home" home-assistant "$ha"
+
+  mkdir -p "$hibit/projects/worker" "$wheel/projects/worker" "$sshhip/projects/child" "$ha/projects/prep"
+  cat > "$hibit/data/backlog.md" <<'EOF'
+## In flight
+- [ ] dogfood-program - Long-lived dogfood program (repo: hibit) (kind: program)
+- [ ] hibit-worker - Finalize progress (repo: hibit) (kind: ship)
+
+## Queued
+
+## Done
+EOF
+  fm_write_meta "$hibit/state/hibit-worker.meta" \
+    "window=firstmate:fm-hibit-worker" "worktree=$hibit/projects/worker" "project=hibit" \
+    "harness=claude" "kind=ship" "mode=no-mistakes"
+  record_claude_state "$hibit/state" hibit-worker busy
+  printf 'working: finalizing progress\n' > "$hibit/state/hibit-worker.status"
+
+  cat > "$wheel/data/backlog.md" <<'EOF'
+## In flight
+- [ ] production-observation - Observe production (repo: wheelhouse) (kind: scout) (hold: documented no live worker) (hold-kind: external)
+- [ ] wheel-worker - Initial triage (repo: wheelhouse) (kind: ship)
+
+## Queued
+
+## Done
+EOF
+  fm_write_meta "$wheel/state/wheel-worker.meta" \
+    "window=firstmate:fm-wheel-worker" "worktree=$wheel/projects/worker" "project=wheelhouse" \
+    "harness=claude" "kind=ship" "mode=no-mistakes"
+  record_claude_state "$wheel/state" wheel-worker busy
+  printf 'working: active validation\n' > "$wheel/state/wheel-worker.status"
+
+  cat > "$sshhip/data/backlog.md" <<'EOF'
+## In flight
+- [ ] unreadable-child - Submit App Store build (repo: sshhip) (kind: ship)
+
+## Queued
+- [ ] reviewer-decision - Choose reviewer remediation (repo: sshhip) (kind: captain) (hold: choose reviewer remediation A or B) (hold-kind: captain)
+
+## Done
+- [x] prior-release - Prior release (repo: sshhip) (kind: ship) (done 2026-07-21)
+EOF
+  fm_write_meta "$sshhip/state/unreadable-child.meta" \
+    "window=firstmate:dead-sshhip-child" "worktree=$sshhip/projects/child" "project=sshhip" \
+    "harness=codex" "kind=ship" "mode=no-mistakes"
+
+  cat > "$ha/data/backlog.md" <<'EOF'
+## In flight
+- [ ] prep - Prepare canary (repo: home-assistant) (kind: ship)
+
+## Queued
+- [ ] security - Security review (repo: home-assistant) (kind: ship)
+- [ ] captain-run - Run captain canary blocked-by: prep blocked-by: security (repo: home-assistant) (kind: captain) (hold: captain runs canary) (hold-kind: captain)
+
+## Done
+EOF
+  fm_write_meta "$ha/state/prep.meta" \
+    "window=firstmate:fm-prep" "worktree=$ha/projects/prep" "project=home-assistant" \
+    "harness=claude" "kind=ship" "mode=no-mistakes"
+  record_claude_state "$ha/state" prep busy
+  printf 'working: preparing canary\n' > "$ha/state/prep.status"
+
+  fakebin=$(make_fakebin "$home")
+  refresh_local_secondmate_ledgers "$home"
+  canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
+    "$ROOT/bin/fm-fleet-snapshot.sh" --json)
+  printf '%s' "$canonical" | jq -e '
+    (.secondmate_current.records[] | select(.id == "hibit")
+      | .current.state == "active_child_work"
+        and [.active_children[].id] == ["hibit-worker"]
+        and ([.endpoints[].id] | index("dogfood-program") | not))
+      and (.secondmate_current.records[] | select(.id == "wheel")
+        | .current.state == "active_child_work"
+          and [.active_children[].id] == ["wheel-worker"]
+          and [.queued[].id] == ["production-observation"]
+          and [.holds[].id] == ["production-observation"])
+      and (.secondmate_current.records[] | select(.id == "sshhip")
+        | .current.state == "unknown"
+          and (.current.reason | contains("child current state unavailable: unreadable-child"))
+          and .provenance.selected == "structured-home"
+          and .provenance.summary_valid == false
+          and .provenance.trust == "partial-structured"
+          and .invalidity == {kind:"child_current_unavailable",ids:["unreadable-child"]}
+          and [.decisions_open[].id] == ["reviewer-decision"]
+          and [.holds[].id] == ["reviewer-decision"]
+          and [.queued[].id] == ["reviewer-decision"]
+          and [.landed[].id] == ["prior-release"]
+          and [.endpoints[].id] == ["unreadable-child"]
+          and .counts.decisions_open == 1
+          and .counts.holds == 1
+          and .counts.queued == 1
+          and .counts.landed == 1
+          and .counts.endpoints == 1)
+      and (.secondmate_landed.partial | length) == 1
+      and (.secondmate_landed.partial[0] | endswith("/mixed-sshhip-home"))
+      and (.secondmate_landed.unreadable | length) == 0
+      and (.secondmate_current.records[] | select(.id == "home-assistant")
+        | .current.state == "active_child_work"
+          and .decisions_open == []
+          and [.active_children[].id] == ["prep"]
+          and (.queued[] | select(.id == "captain-run")
+            | .blocked_by_ids == ["prep", "security"]
+              and .unresolved_blocker_ids == ["prep", "security"]
+              and .captain_actionable == false))
+  ' >/dev/null || fail "canonical mixed-domain classification was wrong: $canonical"
+  json=$(run "$home" "$fakebin" --json --fields bodies --all-landed)
+  printf '%s' "$json" | jq -e '
+    ([.in_flight[].id] | sort) == ["hibit/hibit-worker", "home-assistant/prep", "wheel/wheel-worker"]
+      and (.decisions_open | any(.id == "sshhip/reviewer-decision"))
+      and (.decisions_open | any(.id == "home-assistant/captain-run") | not)
+      and (.gates | any(.id == "production-observation" and .owner == "wheel"
+        and .reason == "documented no live worker"))
+      and (.gates | any(.id == "captain-run" and .owner == "home-assistant"
+        and .blocked_by == "prep,security"))
+      and (.secondmates | any(.id == "sshhip" and .state == "unknown"
+        and (.reason | contains("unreadable-child"))))
+  ' >/dev/null || fail "end-to-end mixed-domain projection was wrong: $json"
+
+  sed '/unreadable-child/a\
+- [ ] ordinary-orphan - Unowned release task (repo: sshhip) (kind: ship)' \
+    "$sshhip/data/backlog.md" > "$sshhip/data/backlog.next"
+  mv "$sshhip/data/backlog.next" "$sshhip/data/backlog.md"
+  refresh_local_secondmate_ledgers "$home"
+  canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
+    "$ROOT/bin/fm-fleet-snapshot.sh" --json)
+  printf '%s' "$canonical" | jq -e '
+    .secondmate_current.records[] | select(.id == "sshhip")
+    | .current.state == "unknown"
+      and (.current.reason | contains("in-flight backlog item has no child metadata: ordinary-orphan"))
+      and .provenance.selected == "structured-home"
+      and .provenance.trust == "partial-structured"
+      and .invalidity == {kind:"orphan_in_flight",ids:["ordinary-orphan"]}
+      and [.decisions_open[].id] == ["reviewer-decision"]
+      and [.holds[].id] == ["reviewer-decision"]
+      and [.queued[].id] == ["reviewer-decision"]
+      and [.landed[].id] == ["prior-release"]
+      and [.endpoints[].id] == ["unreadable-child"]
+  ' >/dev/null || fail "an ordinary orphan discarded a readable home alongside an unknown child: $canonical"
+  sed '/ordinary-orphan/d' "$sshhip/data/backlog.md" > "$sshhip/data/backlog.next"
+  mv "$sshhip/data/backlog.next" "$sshhip/data/backlog.md"
+
+  sed '/unreadable-child/d' "$sshhip/data/backlog.md" > "$sshhip/data/backlog.next"
+  mv "$sshhip/data/backlog.next" "$sshhip/data/backlog.md"
+  refresh_local_secondmate_ledgers "$home"
+  canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
+    "$ROOT/bin/fm-fleet-snapshot.sh" --json)
+  printf '%s' "$canonical" | jq -e '
+    .secondmate_current.records[] | select(.id == "sshhip")
+    | .current.state == "unknown"
+      and (.current.reason | contains("live child state has no in-flight backlog item: unreadable-child=unknown"))
+      and .provenance.selected == "structured-home"
+      and .provenance.trust == "partial-structured"
+      and .invalidity == {kind:"unowned_current",ids:["unreadable-child"]}
+      and [.decisions_open[].id] == ["reviewer-decision"]
+      and [.holds[].id] == ["reviewer-decision"]
+      and [.queued[].id] == ["reviewer-decision"]
+      and [.landed[].id] == ["prior-release"]
+  ' >/dev/null || fail "an unowned unknown child discarded the readable home: $canonical"
+  sed '/## In flight/a\
+- [ ] unreadable-child - Submit App Store build (repo: sshhip) (kind: ship)' \
+    "$sshhip/data/backlog.md" > "$sshhip/data/backlog.next"
+  mv "$sshhip/data/backlog.next" "$sshhip/data/backlog.md"
+
+  fm_write_meta "$wheel/state/production-observation.meta" \
+    "window=firstmate:fm-production-observation" "worktree=$wheel/projects/worker" "project=wheelhouse" \
+    "harness=claude" "kind=scout" "mode=scout"
+  record_claude_state "$wheel/state" production-observation idle
+  printf 'paused: observation is deliberately held\n' > "$wheel/state/production-observation.status"
+  refresh_local_secondmate_ledgers "$home"
+  canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
+    "$ROOT/bin/fm-fleet-snapshot.sh" --json)
+  printf '%s' "$canonical" | jq -e '
+    .secondmate_current.records[] | select(.id == "wheel")
+    | ([.queued[] | select(.id == "production-observation")] | length) == 1
+      and ([.holds[] | select(.id == "production-observation")] | length) == 1
+      and ([.endpoints[] | select(.id == "production-observation")] | length) == 1
+  ' >/dev/null || fail "held metadata plus a real child duplicated or discarded the record: $canonical"
+
+  fm_write_meta "$sshhip/state/unreadable-child.meta" \
+    "window=firstmate:fm-unreadable-child" "worktree=$sshhip/projects/child" "project=sshhip" \
+    "harness=claude" "kind=ship" "mode=no-mistakes"
+  record_claude_state "$sshhip/state" unreadable-child busy
+  printf 'working: app store submission restored\n' > "$sshhip/state/unreadable-child.status"
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    (.secondmates | any(.id == "sshhip" and .state == "captain_decision" and .reason == "-"))
+      and ([.decisions_open[] | select(.id == "sshhip/reviewer-decision")] | length) == 1
+  ' >/dev/null || fail "restoring the SSHHIP child did not clear only its narrow warning: $json"
+
+  cat > "$ha/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] security - Security review (repo: home-assistant) (kind: ship)
+- [ ] captain-run - Run captain canary blocked-by: prep blocked-by: security (repo: home-assistant) (kind: captain) (hold: captain runs canary) (hold-kind: captain)
+
+## Done
+- [x] prep - Prepare canary (repo: home-assistant) (kind: ship) (done 2026-07-22)
+EOF
+  rm "$ha/state/prep.meta" "$ha/state/prep.status"
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    (.decisions_open | any(.id == "home-assistant/captain-run") | not)
+      and (.gates | any(.id == "captain-run" and .owner == "home-assistant" and .blocked_by == "security"))
+  ' >/dev/null || fail "one remaining Home Assistant blocker became actionable: $json"
+
+  cat > "$ha/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] captain-run - Run captain canary blocked-by: prep blocked-by: security (repo: home-assistant) (kind: captain) (hold: captain runs canary) (hold-kind: captain)
+
+## Done
+- [x] prep - Prepare canary (repo: home-assistant) (kind: ship) (done 2026-07-22)
+- [x] security - Security review (repo: home-assistant) (kind: ship) (done 2026-07-22)
+EOF
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    ([.decisions_open[] | select(.id == "home-assistant/captain-run")] | length) == 1
+      and (.gates | any(.id == "captain-run" and .owner == "home-assistant") | not)
+  ' >/dev/null || fail "zero Home Assistant blockers did not yield exactly one captain action: $json"
+
+  sed 's/blocked-by: security/blocked-by: missing/' "$ha/data/backlog.md" > "$ha/data/backlog.next"
+  mv "$ha/data/backlog.next" "$ha/data/backlog.md"
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    (.decisions_open | any(.id == "home-assistant/captain-run") | not)
+      and (.gates | any(.id == "captain-run" and .owner == "home-assistant" and .blocked_by == "missing"))
+  ' >/dev/null || fail "a missing Home Assistant blocker was treated as Done: $json"
+
+  sed 's/(kind: program)/(kind: mystery)/' "$hibit/data/backlog.md" > "$hibit/data/backlog.next"
+  mv "$hibit/data/backlog.next" "$hibit/data/backlog.md"
+  refresh_local_secondmate_ledgers "$home"
+  canonical=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
+    "$ROOT/bin/fm-fleet-snapshot.sh" --json)
+  printf '%s' "$canonical" | jq -e '
+    .secondmate_current.records[] | select(.id == "hibit")
+    | .current.state == "active_child_work"
+      and (.current.reason | contains("in-flight backlog item has no child metadata: dogfood-program"))
+      and .provenance.selected == "structured-home"
+      and .provenance.trust == "partial-structured"
+      and .invalidity == {kind:"orphan_in_flight",ids:["dogfood-program"]}
+      and [.active_children[].id] == ["hibit-worker"]
+      and [.endpoints[].id] == ["hibit-worker"]
+  ' >/dev/null || fail "an unrecognized worker kind hid the home's live work: $canonical"
+  pass "mixed secondmate roles, partial state, and captain readiness project independently"
+}
+
+test_main_captain_readiness_matches_secondmate_projection() {
+  local home fakebin json
+  home=$(make_home main-captain-readiness)
+  : > "$home/data/secondmates.md"
+  mkdir -p "$home/projects/prep" "$home/projects/observation"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] observation - Held observation (repo: firstmate) (kind: scout) (hold: watch production) (hold-kind: external)
+- [ ] prep - Prepare canary (repo: firstmate) (kind: ship)
+
+## Queued
+- [ ] review - Security review (repo: firstmate) (kind: ship)
+- [ ] captain-run - Run captain canary blocked-by: prep blocked-by: review (repo: firstmate) (kind: captain) (hold: captain runs canary) (hold-kind: captain)
+
+## Done
+EOF
+  fm_write_meta "$home/state/prep.meta" \
+    "window=firstmate:fm-prep" "worktree=$home/projects/prep" "project=firstmate" \
+    "harness=codex" "kind=ship" "mode=no-mistakes"
+  printf 'working: preparing main canary\n' > "$home/state/prep.status"
+  fm_write_meta "$home/state/observation.meta" \
+    "window=firstmate:fm-observation" "worktree=$home/projects/observation" "project=firstmate" \
+    "harness=codex" "kind=scout" "mode=scout"
+  printf 'paused: observation is deliberately held\n' > "$home/state/observation.status"
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    (.in_flight | any(.id == "prep"))
+      and (.in_flight | any(.id == "observation") | not)
+      and ([.gates[] | select(.id == "observation" and .reason == "watch production")] | length) == 1
+      and (.decisions_open | any(.id == "captain-run") | not)
+      and (.gates | any(.id == "captain-run" and .blocked_by == "prep,review"))
+  ' >/dev/null || fail "main blocked captain action or held-child projection was wrong: $json"
+
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] review - Security review (repo: firstmate) (kind: ship)
+- [ ] captain-run - Run captain canary blocked-by: prep blocked-by: review (repo: firstmate) (kind: captain) (hold: captain runs canary) (hold-kind: captain)
+
+## Done
+- [x] prep - Prepare canary (repo: firstmate) (kind: ship) (done 2026-07-22)
+EOF
+  rm "$home/state/prep.meta" "$home/state/prep.status" \
+    "$home/state/observation.meta" "$home/state/observation.status"
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    (.decisions_open | any(.id == "captain-run") | not)
+      and (.gates | any(.id == "captain-run" and .blocked_by == "review"))
+  ' >/dev/null || fail "main one-blocker captain action became premature: $json"
+
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] captain-run - Run captain canary blocked-by: prep blocked-by: review (repo: firstmate) (kind: captain) (hold: captain runs canary) (hold-kind: captain)
+
+## Done
+- [x] prep - Prepare canary (repo: firstmate) (kind: ship) (done 2026-07-22)
+- [x] review - Security review (repo: firstmate) (kind: ship) (done 2026-07-22)
+EOF
+  json=$(run "$home" "$fakebin" --json)
+  printf '%s' "$json" | jq -e '
+    ([.decisions_open[] | select(.id == "captain-run")] | length) == 1
+      and (.gates | any(.id == "captain-run") | not)
+  ' >/dev/null || fail "main zero-blocker captain action was not projected exactly once: $json"
+  pass "main and secondmate captain actionability use the same blocker readiness"
+}
+
+test_remote_ledgers_share_one_concurrent_budget_and_fall_back_to_cache() {
+  local parent fakebin json started elapsed i remote_home pid collector_pid sleeper_pid duplicate_base
+  parent=$(make_home concurrent-remote-ledgers)
+  make_remote_ledger_fleet "$parent" 5
+  fakebin=$(make_remote_ledger_ssh "$parent/remote-ssh")
+  : > "$parent/ledger-calls.log"
+  : > "$parent/ledger-pids.log"
+
+  json=$(run_remote_ledger_bearings "$parent" "$fakebin" 1100)
+  [ "$(wc -l < "$parent/ledger-calls.log" | tr -d ' ')" -eq 5 ] \
+    || fail "a healthy snapshot did not issue exactly one remote file read per home"
+  printf '%s' "$json" | jq -e '
+    (.secondmates | length) == 5
+      and all(.secondmates[]; .freshness == "fresh" and .age_seconds == 100)
+  ' >/dev/null || fail "healthy remote ledgers did not project their generated-epoch ages: $json"
+
+  duplicate_base="$TMP_ROOT/remote-ledger-home-1/state/home-summary.single"
+  cp "$TMP_ROOT/remote-ledger-home-1/state/home-summary.json" "$duplicate_base"
+  cat "$duplicate_base" "$duplicate_base" > "$TMP_ROOT/remote-ledger-home-1/state/home-summary.json"
+  : > "$parent/ledger-calls.log"
+  json=$(run_remote_ledger_bearings "$parent" "$fakebin" 1100)
+  printf '%s' "$json" | jq -e '
+    ([.secondmates[] | select(.id == "ledger-1" and .freshness == "cached" and .age_seconds == 100)] | length) == 1
+      and ([.secondmates[] | select(.id != "ledger-1" and .freshness == "fresh")] | length) == 4
+  ' >/dev/null || fail "a multi-document live ledger bypassed the valid cache: $json"
+  [ "$(wc -l < "$parent/ledger-calls.log" | tr -d ' ')" -eq 5 ] \
+    || fail "rejecting a multi-document live ledger added remote reads"
+  mv "$duplicate_base" "$TMP_ROOT/remote-ledger-home-1/state/home-summary.json"
+
+  : > "$TMP_ROOT/remote-ledger-home-1/state/unbounded-ledger-read"
+  : > "$parent/ledger-calls.log"
+  json=$(run_remote_ledger_bearings "$parent" "$fakebin" 1100)
+  printf '%s' "$json" | jq -e '
+    ([.secondmates[] | select(.id == "ledger-1" and .freshness == "cached")] | length) == 1
+      and ([.secondmates[] | select(.id != "ledger-1" and .freshness == "fresh")] | length) == 4
+  ' >/dev/null || fail "an unbounded primary ledger stream consumed the shared collector budget: $json"
+  [ "$(wc -l < "$parent/ledger-calls.log" | tr -d ' ')" -eq 5 ] \
+    || fail "bounding one faulty primary ledger added remote reads"
+  rm -f "$TMP_ROOT/remote-ledger-home-1/state/unbounded-ledger-read"
+
+  i=1
+  while [ "$i" -le 5 ]; do
+    remote_home="$TMP_ROOT/remote-ledger-home-$i"
+    : > "$remote_home/state/slow-ledger-read"
+    i=$((i + 1))
+  done
+  : > "$parent/ledger-calls.log"
+  : > "$parent/ledger-pids.log"
+  started=$(date +%s)
+  json=$(run_remote_ledger_bearings "$parent" "$fakebin" 2000)
+  elapsed=$(( $(date +%s) - started ))
+  # The three-second bound covers remote collection, while setup, cache validation,
+  # and projection run outside it. Keep the end-to-end ceiling well below the
+  # fifteen seconds that five serial three-second reads would require, without
+  # treating slower stock-macOS jq/process startup as collector serialization.
+  [ "$elapsed" -lt 12 ] || fail "five wedged remote reads behaved serially despite the shared three-second budget (${elapsed}s)"
+  printf '%s' "$json" | jq -e '
+    (.secondmates | length) == 5
+      and all(.secondmates[]; .freshness == "cached" and .age_seconds == 1000
+        and .provenance == "structured-home-cache")
+      and ([.omitted[] | select(.surface | contains("served from cached home ledger"))] | length) == 5
+  ' >/dev/null || fail "wedged homes did not use and disclose age-labeled cache rows: $json"
+  sleep 0.3
+  while read -r collector_pid sleeper_pid; do
+    for pid in "$collector_pid" "$sleeper_pid"; do
+      [ -n "$pid" ] || continue
+      if kill -0 "$pid" 2>/dev/null; then
+        fail "a cancelled remote ledger collector process survived the total budget (pid $pid)"
+      fi
+    done
+  done < "$parent/ledger-pids.log"
+
+  i=1
+  while [ "$i" -le 5 ]; do
+    remote_home="$TMP_ROOT/remote-ledger-home-$i"
+    remote_home=$(cd "$remote_home" && pwd -P)
+    rm -f "$remote_home/state/slow-ledger-read"
+    write_remote_home_summary "$remote_home" 1990
+    i=$((i + 1))
+  done
+  : > "$TMP_ROOT/remote-ledger-home-1/state/slow-ledger-read"
+  : > "$parent/ledger-calls.log"
+  : > "$parent/ledger-pids.log"
+  json=$(run_remote_ledger_bearings "$parent" "$fakebin" 2000)
+  printf '%s' "$json" | jq -e '
+    ([.secondmates[] | select(.freshness == "fresh" and .age_seconds == 10)] | length) == 4
+      and ([.secondmates[] | select(.id == "ledger-1" and .freshness == "cached"
+        and .age_seconds == 1000 and .provenance == "structured-home-cache")] | length) == 1
+      and ([.omitted[] | select(.surface == "secondmate ledger-1 served from cached home ledger")] | length) == 1
+  ' >/dev/null || fail "one slow home prevented four fresh rows or hid its cache disclosure: $json"
+  [ "$(wc -l < "$parent/ledger-calls.log" | tr -d ' ')" -eq 5 ] \
+    || fail "the mixed-speed snapshot made more than one remote read per ledger home"
+  pass "remote ledgers collect concurrently under one budget, reuse aged cache, and cancel wedged collectors"
+}
+
+test_a_remote_home_without_any_ledger_is_explicitly_unreadable_without_remote_compute() {
+  local parent fakebin remote_home json
+  parent=$(make_home remote-ledger-missing)
+  make_remote_ledger_fleet "$parent" 1
+  remote_home="$TMP_ROOT/remote-ledger-home-1"
+  rm -f "$remote_home/state/home-summary.json" "$remote_home/state/slow-ledger-read"
+  fakebin=$(make_remote_ledger_ssh "$parent/remote-ssh")
+  : > "$parent/ledger-calls.log"
+  : > "$parent/ledger-pids.log"
+
+  json=$(run_remote_ledger_bearings "$parent" "$fakebin" 1100)
+  printf '%s' "$json" | jq -e '
+    (.secondmates | length) == 1
+      and .secondmates[0].state == "unknown"
+      and .secondmates[0].provenance == "unknown"
+      and (.secondmates[0].reason | contains("home ledger is missing, unreadable, or invalid"))
+      and (.omitted | any(.surface == "secondmate home(s) with unreadable structured state: 1"))
+  ' >/dev/null || fail "a no-ledger remote home was not explicitly disclosed as unreadable: $json"
+  [ "$(wc -l < "$parent/ledger-calls.log" | tr -d ' ')" -eq 1 ] \
+    || fail "a no-ledger remote home issued more than its single ledger read"
+  [ "$(awk -F '\t' 'NR == 1 { print $2 }' "$parent/ledger-calls.log")" = "fm-remote-file.sh" ] \
+    || fail "a no-ledger remote home triggered remote summary computation: $(cat "$parent/ledger-calls.log")"
+  pass "a missing remote ledger stays explicitly unreadable without remote summary computation"
+}
+
+test_remote_ledgers_share_one_concurrent_budget_and_fall_back_to_cache
+test_a_remote_home_without_any_ledger_is_explicitly_unreadable_without_remote_compute
 test_domain_alpha_stale_parent_event_does_not_become_current_work
 test_gnu_stat_uses_file_formats_without_bsd_fallback_pollution
 test_parent_activity_evidence_is_bounded_and_disclosed
 test_active_child_overrides_old_parent_event
 test_structured_child_decision_reaches_captains_call
 test_bad_secondmate_homes_never_revive_parent_work
+test_oversized_secondmate_summary_stays_strict_unknown
 test_secondmate_and_child_bounds_are_disclosed
 test_parent_decision_is_untrusted_contradiction_only
 test_parent_evidence_reconciles_by_verb_and_key
@@ -1230,10 +2301,21 @@ test_current_landed_baseline_is_repeatable_and_prior_report_independent
 test_default_is_bounded_and_local_only
 test_toon_json_parity
 test_landed_includes_secondmate_home_merges
+test_landed_default_balances_dominant_and_sparse_homes
+test_landed_default_refills_capacity_after_sparse_homes_exhaust
+test_landed_default_uses_deterministic_home_order_when_homes_exceed_cap
+test_landed_default_preserves_internal_order_for_ties
+test_landed_default_handles_no_landed_items
+test_all_landed_keeps_complete_global_order
 test_landed_bounded_and_disclosed
 test_live_blocker_is_not_charted_queue_work
 test_captains_call_anti_leak
-test_chat_contract_four_sections
+test_main_orphan_in_flight_is_disclosed_not_invented
+test_main_unstructured_current_is_disclosed_with_structured_sibling
+test_main_orphan_counterfactual_meta_clears_inventory_warning
+test_active_children_project_independent_of_home_captain_hold
+test_mixed_secondmate_roles_partial_state_and_captain_readiness
+test_main_captain_readiness_matches_secondmate_projection
 test_completed_scout_report_not_pending
 test_open_decision_surfaces_end_to_end
 test_report_pointers_surface
@@ -1242,6 +2324,7 @@ test_include_prs_is_the_only_fetch_path
 test_partial_github_failure_degrades
 test_perl_fallback_bounds_github_call
 test_section_caps_and_expansion_flags
+test_collapsed_captain_call_deferral_and_landed
 test_pr_repository_cap_and_expansion
 test_per_repository_pr_cap_is_disclosed
 test_projection_and_toon_fail_closed

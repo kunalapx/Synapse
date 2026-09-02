@@ -1,26 +1,45 @@
 #!/usr/bin/env bash
-# Resolve a project's delivery mode and yolo flag from the data/projects.md registry.
+# Resolve a project's REGISTERED delivery posture from the data/projects.md registry.
 # Prints two words to stdout: "<mode> <yolo>" where mode is one of
 # direct-PR|local-only and yolo is on|off.
+#
+# MECHANICAL CONSUMERS ONLY. This answers "what posture did the captain register
+# for this project", never "how does this task ship". A task's delivery mode and
+# yolo are resolved by firstmate at intake and passed explicitly to
+# bin/fm-brief.sh, bin/fm-spawn.sh, and bin/fm-promote.sh (AGENTS.md section 7).
+# The consumers are bin/fm-fleet-sync.sh (skip local-only clones),
+# bin/fm-home-seed.sh (refuse local-only seeding), and bin/fm-spawn.sh's
+# advisory registry-deviation notice.
 #
 # Registry line format (data/projects.md):
 #   - <name> - <desc> (added <date>)                  -> direct-PR off  (legacy default)
 #   - <name> [<mode>] - <desc> (added <date>)          -> <mode> off
 #   - <name> [<mode> +yolo] - <desc> (added <date>)    -> <mode> on
 #
-# mode = how a finished change reaches main:
-#   direct-PR    implement, self-review (/verify-feature + /high-level-review), push +
-#                PR via gh-axi -> captain merge (default)
-#   local-only   local branch, no remote/PR -> firstmate review -> captain approve -> local merge
-# yolo (orthogonal) = when on, firstmate makes approval decisions itself (PR merges,
-#   needs-decision escalations, local-only merge approval) without checking the captain -
-#   except anything destructive/irreversible/security-sensitive, which still escalates.
+# Registered modes:
+#   direct-PR   implement, self-review (/verify-feature + /high-level-review),
+#               push + PR via gh-axi -> captain merge (default)
+#   local-only  local branch, no remote/PR -> firstmate review -> captain
+#               approve -> guarded local merge
+# yolo (orthogonal) = merge authority only: when on, firstmate merges green,
+#   in-scope work itself (AGENTS.md section 7).
 #
-# A legacy "no-mistakes" registry entry (the retired automated-pipeline mode) is treated
-# as an unknown mode below and falls back to direct-PR, same as any other typo.
+# The retired automated-pipeline postures (no-mistakes and the
+# no-mistakes-prod-only conditional policy) are no longer registered modes. A
+# legacy registry entry naming either one is treated as an unknown mode below and
+# falls back to direct-PR, exactly like any other typo. Because no registered
+# mode maps to no-mistakes any more, a mechanical consumer's no-mistakes leg is
+# unreachable through this parser.
+#
+# --raw prints the registered annotation unmapped. No registered mode is mapped
+# today, so raw and mapped output agree; the flag stays the stable accessor for a
+# caller that must never be handed a mapped substitute (bin/fm-spawn.sh's
+# standing-posture notice) and is the one place a future conditional policy would
+# land.
+#
 # An unknown/missing project or unknown mode falls back to "direct-PR off" and warns
 # to stderr, so a typo never silently drops review.
-# Usage: fm-project-mode.sh <project-name>
+# Usage: fm-project-mode.sh [--raw] <project-name>
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,7 +47,12 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 REG="$DATA/projects.md"
-NAME=${1:?usage: fm-project-mode.sh <project-name>}
+if [ "${1:-}" = "--raw" ]; then
+  # Accepted and deliberately inert: --raw asks for the registered annotation
+  # unmapped, and no registered mode is mapped today (see the header).
+  shift
+fi
+NAME=${1:?usage: fm-project-mode.sh [--raw] <project-name>}
 
 if [ ! -f "$REG" ]; then
   echo "warn: no registry at $REG; defaulting $NAME to direct-PR off" >&2

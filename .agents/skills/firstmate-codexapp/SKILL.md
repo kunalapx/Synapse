@@ -60,9 +60,9 @@ That makes status writes a verified return-channel requirement, not a fact to as
 For a Synapse-managed task, include an explicit status instruction:
 
 ```text
-Append supervisor-visible status lines to <absolute-synapse-home>/state/<task-id>.status.
+Append supervisor-visible status lines to <absolute-firstmate-home>/state/<task-id>.status.
 Use only these prefixes for status changes: working:, needs-decision:, blocked:, paused:, done:, failed:.
-Use paused: only for a deliberate known external wait that should be rechecked later, never for a blocker that needs Synapse to act.
+Use paused: only for a deliberate known external wait that should be rechecked later, never for a blocker that needs firstmate to act.
 Before doing substantive work, append "working: Codex Desktop thread started".
 ```
 
@@ -91,6 +91,7 @@ For Synapse reconciliation, prefer concrete evidence:
 
 Avoid repeating long transcripts into Synapse docs or PR bodies.
 Summarize only the host-tool calls, the status-file result, and the archive result.
+When reporting a Desktop-thread result to the boss, translate status prefixes and return-channel evidence through `AGENTS.md` section 9.
 
 ## Archive
 
