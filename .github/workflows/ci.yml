@@ -3,11 +3,24 @@ name: CI
 on:
   push:
     branches: [main]
+  # Deliberately unfiltered by base branch. A `branches:` allowlist here fails
+  # SILENTLY: a PR targeting anything not on the list reports "no CI checks
+  # configured", which reads as green and is really "never tested". That is how
+  # seven untested slices reached an integration branch. Any PR, whatever it
+  # targets, is a deliberate request for review and gets the full matrix, so a
+  # stacked slice is tested BEFORE it merges into the branch that feeds main.
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
+
+# The unfiltered trigger above is paid for here. Superseded runs for the same PR
+# are cancelled, so a slice that is pushed N times costs one matrix rather than
+# N. Pushes to main are keyed by ref and never cancelled: main's post-merge
+# result must always be recorded.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
