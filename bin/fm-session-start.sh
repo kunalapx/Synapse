@@ -50,14 +50,18 @@
 #   7. network checks - the result of the deferred network stage started back at
 #                       step 1, harvested WITHOUT waiting for it.
 #   8. context digest - data/projects.md, data/secondmates.md, data/captain.md,
-#                       data/captain-shared.md, data/learnings.md: read-only,
-#                       always safe, always runs.
+#                       data/captain-shared.md, data/learnings.md, and the
+#                       active governed-memory summary: read-only, always safe,
+#                       always runs.
 #   9. closing reminder - prints the context-specific watcher next step; this
 #                       script points back to the emitted harness supervision
 #                       block and deliberately never arms the watcher itself.
 #
 # Those nine names are also the runtime-bound stage list below, so a truncated
-# startup can name exactly which of them never ran.
+# startup can name exactly which of them never ran. The Synapse startup banner
+# prints ahead of all nine and is deliberately not a stage: it emits identity
+# only, before the first breadcrumb, so `lock` stays the first stage a
+# truncation banner can name.
 #
 # NO NETWORK ON THE BLOCKING PATH. This digest runs on a session-open hook that
 # blocks session initialization, so anything it waits for is time the captain
@@ -363,6 +367,35 @@ SUBRULE='-----------------------------------------------------------------------
 section() { printf '\n%s\n%s\n%s\n' "$RULE" "$1" "$RULE"; }
 subsection() { printf '\n%s\n%s\n' "$1" "$SUBRULE"; }
 
+# print_banner: the Synapse startup banner (the captain's fixed design),
+# printed once as the very first thing a session-start digest emits
+# (AGENTS.md section 3). Identity only - it never gates anything, it prints in
+# both locked and read-only sessions, and it is deliberately not one of the
+# SESSION_START_STAGES because it emits before the first stage breadcrumb, so a
+# truncation banner still names `lock` as the first stage that never completed.
+# The framed box-drawing/block art is emitted through a single-quoted heredoc so
+# bash reproduces every multi-byte UTF-8 glyph byte-for-byte, with no expansion
+# or reinterpretation that could misalign the frame. Every line is 65 display
+# columns wide, so the right border stays flush on any UTF-8 terminal.
+print_banner() {
+  printf '\n'
+  cat <<'BANNER'
+╔═══════════════════════════════════════════════════════════════╗
+║                                                               ║
+║  ███████╗██╗   ██╗███╗   ██╗ █████╗ ██████╗ ███████╗███████╗  ║
+║  ██╔════╝╚██╗ ██╔╝████╗  ██║██╔══██╗██╔══██╗██╔════╝██╔════╝  ║
+║  ███████╗ ╚████╔╝ ██╔██╗ ██║███████║██████╔╝███████╗█████╗    ║
+║  ╚════██║  ╚██╔╝  ██║╚██╗██║██╔══██║██╔═══╝ ╚════██║██╔══╝    ║
+║  ███████║   ██║   ██║ ╚████║██║  ██║██║     ███████║███████╗  ║
+║  ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝     ╚══════╝╚══════╝  ║
+║                                                               ║
+║                   MomentScience Engineering                   ║
+║                orchestration · memory · review                ║
+║                                                               ║
+╚═══════════════════════════════════════════════════════════════╝
+BANNER
+}
+
 # print_file_or_absent <path> <label>: full contents under a labeled
 # subsection, or an explicit ABSENT marker. Absence is semantically
 # meaningful for every one of these files (captain.md absent = firstmate
@@ -610,6 +643,8 @@ AGENTS_START_HASH=
 if [ "$REEMIT" -eq 0 ] && [ "$SESSION_SOURCE" = startup ]; then
   AGENTS_START_HASH=$(hash_file_sha256 "$FM_ROOT/AGENTS.md" 2>/dev/null || true)
 fi
+
+print_banner
 
 if [ "$REEMIT" -eq 1 ]; then
   section "SESSION START (CONTEXT RE-EMIT) - $FM_HOME"
@@ -908,6 +943,19 @@ print_file_or_absent "$DATA/secondmates.md" "data/secondmates.md"
 print_file_or_absent "$DATA/captain.md" "data/captain.md"
 print_file_or_absent "$DATA/captain-shared.md" "data/captain-shared.md (shared, main-authoritative, read-only in secondmate homes)"
 print_file_or_absent "$DATA/learnings.md" "data/learnings.md"
+
+# Active governed memory (bin/fm-memory.sh): a metadata-only summary of the
+# ACTIVE entries so this session knows what institutional memory exists before
+# planning. Only the recall table (id/type/class/scope/title) is shown, never
+# entry bodies or frontmatter, so nothing sensitive is dumped here; read a
+# specific entry from data/memory/entries/<id>.md only when a fact is actually
+# needed. An absent or empty store prints fm-memory.sh's own "(no memory)"
+# marker - meaningful, never an error - so this block never contributes an
+# ABSENT marker of its own. It sits last in the context digest, behind the
+# curated memory files, because it is the cheapest line in the whole digest for
+# a truncated tail to take (see this file's ORDERING note).
+subsection "active memory (data/memory, active entries only)"
+"$SCRIPT_DIR/fm-memory.sh" recall 2>/dev/null || printf '(no memory)\n'
 
 # --- 9. closing reminder -----------------------------------------------
 stage next-step
