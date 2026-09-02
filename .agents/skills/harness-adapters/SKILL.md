@@ -1,8 +1,8 @@
 ---
 name: harness-adapters
 description: >-
-  Agent-only reference for firstmate harness operations.
-  Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
+  Agent-only reference for Synapse harness operations.
+  Use before spawning or recovering an agent or domain agent, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
   Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, and muse.
 user-invocable: false
 metadata:
@@ -11,7 +11,7 @@ metadata:
 
 # harness-adapters
 
-This is the one skill, trigger, and routing owner for harness-specific Firstmate operations.
+This is the one skill, trigger, and routing owner for harness-specific Synapse operations.
 Load this router first, then exactly the common reference and one harness reference selected below.
 When an action spans rows, load the union once rather than every reference.
 Files under `references/` are resources of this skill, not additional catalogued skills.
@@ -20,30 +20,30 @@ Files under `references/` are resources of this skill, not additional catalogued
 
 The skill directory is the directory containing this `SKILL.md`.
 Resolve on-demand reference links and relative links to their executable, documentation, or sibling-skill owners against the skill directory, including links named by a nested reference.
-Operational paths keep the context named by their owner: `config/` and active-home settings belong to the active Firstmate home, `state/` belongs to that home, and project settings such as `.claude/settings.json` belong to the target project.
+Operational paths keep the context named by their owner: `config/` and active-home settings belong to the active Synapse home, `state/` belongs to that home, and project settings such as `.claude/settings.json` belong to the target project.
 
 ## Non-negotiable safety
 
-Never dispatch a crewmate or secondmate on an unverified adapter.
-If `config/crew-harness` or `config/secondmate-harness` names one, tell the captain under `../../../AGENTS.md` section 9 that the requested worker runtime is not verified, use firstmate's own verified runtime for current work, and ask only whether to verify the requested runtime for future work.
+Never dispatch an agent or domain agent on an unverified adapter.
+If `config/crew-harness` or `config/secondmate-harness` names one, tell the boss under `../../../AGENTS.md` section 9 that the requested worker runtime is not verified, use Synapse's own verified runtime for current work, and ask only whether to verify the requested runtime for future work.
 Do not pause current work for that choice.
 
-On `unknown`, ask the captain instead of guessing.
-A current captain override beats detection, while a per-task override governs only that dispatch.
+On `unknown`, ask the boss instead of guessing.
+A current boss override beats detection, while a per-task override governs only that dispatch.
 For recovery and control, use the exact `harness=` in `state/<id>.meta`; never infer it from a model or provider.
 
 Deliver lifecycle actions only through `../../../bin/fm-control.sh <task-id> interrupt|exit|relaunch`.
 Never type an interrupt key or exit command through `fm-send`, where routing-marked lifecycle text becomes chat.
 Trust handling is complete only when inspection proves the target started processing its instructions; delivery success alone is not proof.
-Muse is verified only for crewmate and scout work, never a secondmate or primary.
+Muse is verified only for agent and research task work, never a domain agent or primary.
 
 ## Detection
 
-`../../../bin/fm-harness.sh` prints firstmate's own harness from verified environment markers, then process ancestry.
+`../../../bin/fm-harness.sh` prints Synapse's own harness from verified environment markers, then process ancestry.
 Only `FM_PI_HARNESS=pi-signed` at the launch boundary together with `PI_CODING_AGENT=true` selects Pi-signed; shared unmarked launcher ancestry remains Pi.
 `../../../bin/fm-spawn.sh` owns worker marker establishment, while the README launch command owns the signed-primary boundary.
-`../../../bin/fm-harness.sh crew` resolves `config/crew-harness`, where absent or `default` means firstmate's own harness.
-`../../../bin/fm-harness.sh secondmate` resolves `config/secondmate-harness` -> `config/crew-harness` -> firstmate's own harness.
+`../../../bin/fm-harness.sh crew` resolves `config/crew-harness`, where absent or `default` means Synapse's own harness.
+`../../../bin/fm-harness.sh secondmate` resolves `config/secondmate-harness` -> `config/crew-harness` -> Synapse's own harness.
 `../../../bin/fm-spawn.sh` re-resolves on every spawn, and an explicit per-spawn argument wins for that spawn.
 A new adapter's verified marker and command name must land in `../../../bin/fm-harness.sh`.
 
