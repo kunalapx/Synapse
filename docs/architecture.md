@@ -194,6 +194,8 @@ Codex App support is recorded in `docs/codex-app-backend.md`; it is not selectab
 
 Crewmates never intentionally touch your project clone; [treehouse](https://github.com/kunchenguid/treehouse) pools clean worktrees for tmux, herdr, zellij, and cmux tasks, while Orca creates its own worktrees for `backend=orca`.
 For ship and scout work, `fm-spawn.sh` refuses to launch unless the resolved task path is a real git worktree root that is distinct from the project primary checkout.
+On every backend except Orca it additionally asserts treehouse ownership: the resolved path must be a linked git worktree whose common git directory is the project's own, so a path that is some other repository's worktree, or that project's main worktree, is refused rather than launched into.
+Orca is exempt because it creates its own worktrees outside the treehouse pool.
 `fm-spawn.sh` also owns the base-freshness boundary for every fresh ship and scout: no worker starts until its clean task worktree matches the fetched tip of origin's resolved default branch, and any unsafe or unverifiable base stops the spawn.
 Its header owns the exact refusal mechanics, while `tests/fm-spawn-pool-base-freshen.test.sh` owns the portable regression coverage.
 
@@ -217,7 +219,7 @@ The helper's header owns the exact signal detection, relocated-home limitation, 
 
 ## Two task shapes
 
-Ship tasks change projects and ship by project mode (`no-mistakes`, `direct-PR`, or `local-only`); scout tasks leave standalone investigation reports at `data/<id>/report.md` and never push.
+Ship tasks change projects and ship by delivery mode (`direct-PR` or `local-only`); scout tasks leave standalone investigation reports at `data/<id>/report.md` and never push.
 The intake and authority contract in `AGENTS.md` owns when separate scout research is warranted.
 
 ## Dispatch profiles
@@ -237,14 +239,14 @@ That keeps spawn launch compatible across claude, codex, opencode, pi, pi-signed
 A local route points directly at its home, while a remote route adds an SSH alias and remote Firstmate code root so the entire home and all of its child work stay on that host.
 Remote placement pins the remote second-mate agent to Herdr while leaving the remote home's worker backend selection independent, and every non-doctor primary-to-remote `fm-on` command runs through the remote account's Firstmate-owned job worker rather than its SSH process or a Herdr pane.
 [`remote-secondmates.md`](remote-secondmates.md) owns current setup, supplied-origin provisioning, transport, relay, failure, and retirement behavior.
-`fm-home-seed.sh` provisions a local isolated home, clones the listed PR-based projects into it, initializes newly cloned `no-mistakes` projects, copies the charter to `data/charter.md`, and `fm-spawn.sh --secondmate` launches it through the same session-provider and status-file path as any direct report.
+`fm-home-seed.sh` provisions a local isolated home, clones the listed PR-based projects into it, copies the charter to `data/charter.md`, and `fm-spawn.sh --secondmate` launches it through the same session-provider and status-file path as any direct report.
 For a domain whose subject is the firstmate repo itself, a deliberate `--no-projects` seed creates a project-less home whose crews take pooled worktrees of that repo instead of separate clones.
 The signal cannot be mixed with project names or omitted accidentally, and a populated home cannot be converted in place; the full seed contract is in [configuration.md](configuration.md#secondmate-routes-datasecondmatesmd).
 Herdr secondmate and child placement follows the launcher-binding contract in [Watching and task containers](herdr-backend.md#watching-and-task-containers).
 When seeded with `-`, the home is a durable treehouse lease under the secondmate id, so it survives with no live process and is not recycled by later `treehouse get` or pruning.
 Retirement or seed rollback returns the leased home; normal restart/recovery keeps it leased.
 If returning the lease fails during teardown, firstmate leaves the route and home intact instead of hiding a still-held lease.
-Seeding is transactional: if validation, cloning, initialization, or registry update fails, generated briefs, new homes, new project clones, and registry edits are rolled back.
+Seeding is transactional: if validation, cloning, or registry update fails, generated briefs, new homes, new project clones, and registry edits are rolled back.
 `local-only` projects stay with the main first mate because they merge into the main local checkout instead of a remote-backed PR path.
 The same project may appear in multiple secondmate homes when their scopes differ, such as issue triage versus feature development.
 Secondmates are idle by default: after startup recovery reconciles only work already in their own home, an empty queue waits silently for routed tasks, and they never self-initiate surveys or audits.
@@ -276,16 +278,19 @@ The `data/secondmates.md` line contract is owned by the [`secondmate-provisionin
 
 ## Delivery modes are explicit per task
 
-`no-mistakes` tasks run the full validation pipeline, `direct-PR` tasks open PRs without that pipeline, and `local-only` tasks stay local until firstmate performs an approved fast-forward merge.
+`direct-PR` tasks have the worker validate its own diff and open the PR itself, and `local-only` tasks run that same self-validation, then stay local until firstmate performs an approved fast-forward merge.
+Self-validation is an explicitly named step, not a byproduct of review: the worker runs the project's own build, lint, and typecheck commands first, then `/verify-feature` when the task carries a tracked ticket, then `/high-level-review` against the base branch, fixing what it flags itself.
+There is no `no-mistakes` delivery mode; that pipeline is retired as a delivery mechanism for managed projects and survives only as this repo's own external-contributor gate, described in [`CONTRIBUTING.md`](../CONTRIBUTING.md) and configured by [`configuration.md`](configuration.md).
 Each task's mode and `yolo` merge posture are firstmate's decision at intake.
 The mode is passed explicitly to `bin/fm-brief.sh`, and both values are passed explicitly to `bin/fm-spawn.sh` and `bin/fm-promote.sh`; each command refuses to guess the values it consumes.
 A ship brief records its mode as a fixed machine-readable line and the spawn refuses to launch on a different one, so the worker's instructions and the recorded task delivery cannot diverge.
 `bin/fm-dod-lib.sh` is the one owner of that mode's definition of done, rendered both into a generated ship brief and into the ship instructions a promoted scout receives, so a promoted worker cannot be handed a weaker contract than a briefed one.
-`data/projects.md` records each project's standing posture and optional `+yolo` merge flag as the captain's default and as context for that decision, including the conditional `no-mistakes-prod-only` policy; a ship spawn that drops below the registered rigor prints a deviation notice and continues.
-`bin/fm-project-mode.sh` remains the one registry parser for the mechanical consumers that have no task in hand: fleet sync's `local-only` skip and home seeding's refusal and no-mistakes initialization.
+`data/projects.md` records each project's standing posture and optional `+yolo` merge flag as the captain's default and as context for that decision; a ship spawn that drops below the registered rigor prints a deviation notice and continues.
+`bin/fm-project-mode.sh` remains the one registry parser for the mechanical consumers that have no task in hand: fleet sync's `local-only` skip and home seeding's `local-only` refusal.
 When a selected delivery path calls for a diff, `bin/fm-review-diff.sh` refreshes the authoritative base and, when task meta records `pr=`, always fetches and compares against `refs/pull/<n>/head` by default (recorded `pr_head=` is only an offline fallback) before falling back to the local branch with a warning.
-Where a no-mistakes pipeline stores evidence in the repo, it publishes that PR-viewable validation evidence to an orphan evidence branch that shares no history with code branches, so it never enters the crew branch or the default branch.
-This repo uses that setting, and its own `.no-mistakes/` directory remains local state that stays gitignored and is rejected by CI if tracked; [`configuration.md`](configuration.md) owns the setting.
+This repo's contributor gate publishes each run's PR-viewable validation evidence to an orphan evidence branch that shares no history with code branches, so it never enters the crew branch or the default branch.
+The working `.no-mistakes/` directory remains local state that stays gitignored and is rejected by CI if tracked; [`configuration.md`](configuration.md) owns the setting.
+None of that is on any managed project's delivery path.
 PR-based task merges go through `bin/fm-pr-merge.sh`, which records `pr=` and any available `pr_head=` through `bin/fm-pr-check.sh` before calling the forge CLI.
 The helper requires a full canonical URL and rejects malformed URLs or repo override flags before recording merge state.
 A `https://github.com/<owner>/<repo>/pull/<n>` URL invokes `gh-axi pr merge <n> --repo <owner>/<repo>`, defaults to `--squash`, and preserves explicit merge-method flags.
@@ -357,13 +362,29 @@ The full ownership rule - what is project-intrinsic versus fleet-private, and ho
 ## Operational memory routing
 
 `/stow` sweeps the current session for durable knowledge that only exists in conversation and routes each finding to the most specific disk home.
-Home-domain captain preferences go to `data/captain.md`, cross-domain shared captain preferences go to the primary home's `data/captain-shared.md`, fleet-local operational facts and gotchas go to home-local `data/learnings.md`, project-intrinsic knowledge goes through normal crewmate delivery into that project's committed `AGENTS.md`, and task-scoped notes or undone next steps go to the backlog.
+Home-domain captain preferences go to `data/captain.md`, cross-domain shared captain preferences go to the primary home's `data/captain-shared.md`, fleet learnings and gotchas are proposed as candidates into the governed memory store described below, project-intrinsic knowledge goes through normal crewmate delivery into that project's committed `AGENTS.md`, and task-scoped notes or undone next steps go to the backlog.
+`data/learnings.md` is retired as a write target rather than deleted: an existing file stays in place and is still surfaced read-only in the session-start digest, so nothing already captured is lost.
 Memory writes use inspect-then-update rather than blind append; the internal [`stow` skill](../.agents/skills/stow/SKILL.md) owns tier markers, decay, cold archival, and offload.
 The same pass also persists open-work record state the session is holding - filing a thread that was never recorded and correcting one the session knows went stale - bounded to the open work that session is actually holding.
 It is deliberately not a reconciliation of durable records against repository or PR reality: its input is the volatile context, so it can only preserve what the session still knows, and no reconciliation that outlives a session exists today.
 Task-scoped notes use `tasks-axi show <id> --full` followed by `tasks-axi update <id> --body-file <path>`, adding `--archive-body` when the prior body should remain recoverable.
 The stow pass never writes a skill, but a separately executed, captain-approved migration may move conditional knowledge into a user-owned local skill excluded from the Firstmate clone; changes to Firstmate's tracked skills remain deliberate repository work through the normal PR pipeline.
 Invoked in a primary home, `/stow` then cascades the same sweep to every registered secondmate, enumerated through `bin/fm-stow-cascade.sh`: each home is accounted and curated against its own startup-memory allowance, a live secondmate sweeps its own session, and a slow or unreachable home is reported as an exception rather than blocking the primary.
+
+## Governed memory
+
+`bin/fm-memory.sh` is the institutional-memory store, and it is governed rather than a shared notes folder.
+Its only trusted state is `active`, and no caller ever writes that state directly.
+An agent proposes a candidate carrying its evidence and attribution, a class-specific validation gate must pass against the candidate's current content hash, and only then can `promote` flip it to `active`.
+That non-auto-promotion is structural, not policy: `propose` has no status flag and can only ever write `status: candidate`, `promote` is the sole verb that writes `status: active` and has no force or skip escape, and a candidate overlapping an existing active entry for the same fact opens a conflict for human resolution instead of silently superseding it.
+`retire` is the one verb that removes trust from a single named entry, so it runs no gate, takes no wildcard, and preserves the file for audit.
+Every `propose` runs `bin/fm-secret-scan.sh` before writing anything, and a matched secret shape refuses the write outright.
+
+Storage lives under `$FM_HOME/data/memory` and is gitignored with the rest of `data/`; [configuration.md](configuration.md#governed-memory-datamemory) owns the layout, the proposer registry, and the two orthogonal per-entry axes.
+
+Retrieval is firstmate-owned and never model-driven.
+`bin/fm-session-start.sh` surfaces the active entries in the session-start digest, and `bin/fm-brief.sh` injects the entries scoped to a project into that task's brief, so scoped active memory reaches the supervisor before planning and each worker before it starts.
+Recalled and injected entries are read-only context, never instructions, and `/stow` is the intended write path into the store.
 
 ## Local clones stay fresh
 

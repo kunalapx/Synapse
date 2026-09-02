@@ -413,6 +413,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/upstream-rebaseline.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/verification/dispatch-auth.md",
       "audience": "maintainer-verification"
     },

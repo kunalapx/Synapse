@@ -200,7 +200,9 @@ The flag is a home-local supervision-noise preference and is not inherited by se
 
 ## Gate defaults (.no-mistakes.yaml)
 
-The tracked `.no-mistakes.yaml` sets `test.evidence.store_in_repo: true` and pins `commands.lint` to `bin/fm-lint.sh` so local lint matches CI.
+The tracked `.no-mistakes.yaml` configures this repo's own external-contributor gate, the one described in [CONTRIBUTING.md](../CONTRIBUTING.md) for human-authored pull requests targeting `main`.
+It is unrelated to how firstmate delivers work on the projects it manages: no delivery mode drives the no-mistakes pipeline, so nothing in this section applies to a managed project's ship path.
+The file sets `test.evidence.store_in_repo: true` and pins `commands.lint` to `bin/fm-lint.sh` so local lint matches CI.
 Storing evidence in the repo publishes each run's test artifacts to the orphan `no-mistakes/evidence` branch and links them from the PR body, instead of keeping them on local disk under the no-mistakes home.
 That branch shares no history with code branches, so evidence never enters a pushed feature branch or the default branch; the worktree's `.no-mistakes/` stays local and CI rejects tracked entries under that path.
 It does not set `commands.test` to a complete `tests/*.test.sh` walk.
@@ -216,9 +218,26 @@ Shared captain preferences that apply across secondmate domains live only in the
 
 ## Operational learnings (data/learnings.md)
 
-Fleet-local operational facts and gotchas live locally in `data/learnings.md`; it is gitignored and printed after the captain-preference files in the session-start context digest.
-The file is created lazily on first learning and follows the internal [`stow` skill's](../.agents/skills/stow/SKILL.md) aging-tier and cold-archive contract: inspect the current file first and curate it instead of appending forever.
+`data/learnings.md` is the legacy home for fleet-local operational facts and gotchas; it is gitignored and printed after the captain-preference files in the session-start context digest.
+It is retired as a write target: new fleet learnings and gotchas are proposed into the governed memory store below through `/stow`, which no longer appends here.
+An existing file is left in place rather than deleted, stays read-only in the digest, and still follows the internal [`stow` skill's](../.agents/skills/stow/SKILL.md) aging-tier and cold-archive contract when it is curated; the file is simply absent until this home has a legacy learning to show.
 There is no shared learnings file by captain decision.
+
+## Governed memory (data/memory)
+
+`bin/fm-memory.sh` is the governed institutional-memory store for fleet learnings, gotchas, conventions, repo facts, architecture decisions, and business facts.
+It is harness-agnostic flat files, and everything it owns lives under `$FM_HOME/data/memory`, gitignored with the rest of `data/`.
+`entries/<id>.md` is one entry as YAML frontmatter plus a prose body, `corroborations/<id>.jsonl` and `validations/<id>.jsonl` are append-only evidence and gate-run logs, `conflicts/<id>.md` is one open or resolved conflict per candidate, and `MEMORY.md` is the active-only recall index that the script regenerates on every state change and that nobody hand-edits.
+The proposer registry is `config/memory-proposers.json`, also gitignored.
+
+Each entry carries two orthogonal axes.
+`type` is the recall taxonomy (`user`, `feedback`, `project`, `reference`), and `validation_class` is what the entry must clear to become authoritative.
+The six classes map to six gates: `repo_fact` to `deterministic_recheck`, `convention` to `code_corroboration`, `architecture_decision` to `boss_confirmation`, `security_rule` to `human_signoff`, and both `preference` and `business_knowledge` to `owner_assertion`.
+The last four require a human checker on the passing validation row; `convention` additionally needs at least two corroborations from distinct `source_task` values, at least one of them `evidence_kind: code_presence`; and `business_knowledge` additionally requires `review_by` to be set.
+The verbs are `propose`, `corroborate`, `confirm`, `promote`, `conflicts`, `resolve`, `recall`, `sweep-stale`, and `retire`; the script's header and each handler own their exact flags.
+[architecture.md](architecture.md#governed-memory) owns why promotion is structurally the only path to trusted state.
+
+Captain preferences are not proposed into this store: `data/captain.md` and `data/captain-shared.md` above stay canonical for those, so no fact lives in two homes.
 
 ## Startup memory budget (config/startup-memory-budget)
 
@@ -260,8 +279,7 @@ A project-less seed requires no existing project clones or `data/projects.md` en
 A preexisting project-bearing charter is also refused until it is re-scaffolded with `--no-projects` or removed.
 The lease is held under the secondmate id until explicit retirement or seed rollback returns it, so normal restarts do not free or recycle the home.
 Teardown of a leased home fails closed if `treehouse return` cannot release the lease; plain-clone homes with no treehouse pool slot are removed directly.
-Secondmate routes cover `no-mistakes` and `direct-PR` projects; `local-only` projects remain main-firstmate work.
-For `no-mistakes` projects, seeding initializes only projects newly cloned into a secondmate home and refuses to mutate a preexisting clone that is not already initialized.
+Secondmate routes cover `direct-PR` projects; `local-only` projects remain main-firstmate work.
 After creating a secondmate, move existing main-backlog queued items that you have judged in-scope with `fm-backlog-handoff.sh <secondmate-id> <item-key>...`; it refuses In flight, Done, or non-secondmate homes, and a new move succeeds only after waking the recorded receiver.
 If the wake is known to have failed, the moved item remains durable and rerunning the same handoff retries it idempotently; an unresolved delivery is reported and never blindly resent.
 Set `FM_SECONDMATE_CHARTER` to seed from inline charter text when no filled charter brief exists; set `FM_SECONDMATE_SCOPE` when the routing scope should differ from the charter text.
