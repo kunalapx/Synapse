@@ -216,8 +216,14 @@ A local skill exists only in this home, so offloading an entry out of `data/capt
    AGENTS.md section 6 is the source of truth for destinations.
    Do not re-derive or duplicate that mapping here.
 3. **Write within the existing boundaries.**
-   - Boss preferences and agent-pool-local operational facts belong in the destination selected by AGENTS.md after the required whole-file curation pass.
-     Create `data/learnings.md` only for a genuinely new local learning with no stronger owner.
+   - Boss preferences belong in the preference destination selected by AGENTS.md after the required whole-file curation pass.
+     They are never proposed into the governed memory store, so no fact lives in two homes.
+   - Fleet knowledge is proposed to the governed memory store as a CANDIDATE with `bin/fm-memory.sh propose`, carrying the evidence that supports it and its source-task attribution.
+     `propose` cannot write `active` state; promotion behind the class validation gate is a separate step this pass never performs.
+     So a proposal is a claim awaiting validation, not a fact you have installed, and the completion receipt must not report it as captured active memory.
+     `bin/fm-memory.sh` is the one owner of the store's format and axes; read its header rather than restating them here.
+   - `data/learnings.md` is retired as a write target: never create it, and never append a newly learned fact to it.
+     An existing legacy file is still curated in place by the one-time migration pass below, which is how it drains.
    - In a primary home, curate shared boss preferences only under the existing primary-authoritative shared-preference contract.
      In a domain agent home, route a newly discovered shared preference to the main Synapse through marked status or a document pointer instead of editing the inherited file.
    - Project-intrinsic knowledge never goes directly into a project's `AGENTS.md`.
@@ -262,6 +268,7 @@ Report the outcome in plain boss-facing language with all of these facts:
 - effective startup-memory budget and total estimated tokens before and after;
 - one or more actions for each of `data/captain.md`, `data/captain-shared.md`, and `data/learnings.md`, using only `unchanged`, `added`, `rewritten`, `pruned`, `routed`, `archived`, or `proposed-offload`; adding or replacing a migration marker is `rewritten`, never a new action verb such as `migrated`;
 - each durable finding filed outside memory and its authoritative owner;
+- each fleet-knowledge candidate proposed to the governed memory store, reported as `proposed` and never as captured active memory, since promotion is a separate gated step;
 - each archived entry's reason, each autonomous offload's live destination and actual relief, and, when a pinned candidate was proposed, the `proposed-offload` section with every candidate's fields;
 - every unresolved exception, including a primary-owned shared-file constraint in a domain agent home, and every concrete boss decision opened for an over-budget result;
 - each open record this pass filed or corrected, and each one it deliberately left alone with the judgment it is waiting on;
