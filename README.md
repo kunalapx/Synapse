@@ -90,7 +90,7 @@ FM_PI_HARNESS=pi-signed pi-signed
 
 For Grok, `--trust` is needed once per clone so project hooks and the turn-end guard load; `/hooks-trust` inside Grok works too.
 For Pi, approve the project trust prompt once per clone on first launch so the tracked `.pi/extensions/*.ts` files auto-load.
-Pi's `/calm` toggle hides supported transcript chrome, including canonically classified Synapse operational rows, and uses a Calm-only animated working indicator during active runs while preserving all model context and session data; [docs/calm.md](docs/calm.md) owns its current behavior and supported limits.
+Pi's `/calm` toggle hides supported transcript chrome, including canonically classified Synapse operational user rows, and uses a Calm-only animated working indicator during active runs while preserving all model context and session data; [docs/calm.md](docs/calm.md) owns its current behavior and supported limits.
 Pi's `/supervision-model` command pins a cheaper model and a shallower reasoning effort for the supervision branch alone, and with no pin that branch normally follows your own conversation's model and effort; see [docs/pi-supervision-branch.md](docs/pi-supervision-branch.md).
 
 ### Talk to it
@@ -154,7 +154,7 @@ Claude and grok use the slash form shown here; codex uses the same names with `$
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/afk`             | Enter away-mode supervision: the sub-supervisor self-handles routine wakes in bash, escalates boss-relevant events and bounded declared-external-wait rechecks as batched digests, and actively alerts if delivery wedges while you step away |
 | `/ahoy`            | Recap visible session events since the prior real boss message plus visibly unanswered boss decisions, then guide you through any open decisions one at a time in agent-judged impact order; fall back to Bearings when invoked as the session's first real boss message |
-| `/bearings`        | Generate a concise four-section chat digest from bounded agent pool state, including registered remote-home ledgers; use `/bearings file` to also replace today's dated report in `data/`, and add `include PRs` for live GitHub enrichment |
+| `/bearings`        | Generate a concise four-section chat digest from bounded agent pool state, including registered remote domain agent homes; use `/bearings file` to also replace today's dated report in `data/`, and add `include PRs` for live GitHub enrichment |
 | `/updatefirstmate` | Self-update the running Synapse and its domain agents to the latest from origin with fast-forward-only pulls, then re-read instructions and nudge domain agents |
 | `/stow`            | Sweep the session for uncaptured durable knowledge, persist the open work records this session knows are unfiled or now wrong, curate tiered startup memory with decay and cold archival, enforce each home's budget or surface the required decision, cascade to registered domain agents, and report what is safe to reset |
 
