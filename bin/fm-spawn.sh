@@ -16,6 +16,17 @@
 #   loud one-line deviation notice is printed and the spawn continues.
 #   no-mistakes-prod-only is a registry policy rather than a task mode and is
 #   refused as a flag value.
+#
+#   THE TASK-MODE SET IS DELIBERATELY WIDER THAN THE REGISTERED PROJECT SET.
+#   bin/fm-project-mode.sh registers direct-PR|local-only; no-mistakes was
+#   retired there as a REGISTERED PROJECT POSTURE, not as a task mode. --mode
+#   answers "how does THIS task ship", which firstmate resolves per task from the
+#   captain's current instruction, so a captain who asks for a pipeline-validated
+#   ship on a direct-PR project still passes --mode no-mistakes and the rigor
+#   ranking below reads it as an upgrade over the standing posture. Narrowing
+#   this flag to the registered set would make that instruction unspawnable. The
+#   two sets answer different questions and are expected to differ; keep them
+#   independent rather than "reconciling" them.
 #        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>]
 #   --relaunch launches a replacement agent for an EXISTING task into that
 #   task's own recorded endpoint and worktree instead of creating either. It is
@@ -1791,9 +1802,12 @@ if [ "$KIND" = ship ]; then
   fi
   # The registry holds the captain's standing posture, so dropping below it is
   # allowed (a current explicit captain instruction wins) but never silent. An
-  # unregistered project resolves to the same no-mistakes standing default, which
-  # is why the notice names the standing posture rather than the registry line. A
-  # conditional policy is excluded: both of its legs are legitimate classifications.
+  # unregistered project resolves to the direct-PR standing default rather than
+  # failing, which is why the notice names the standing posture rather than the
+  # registry line. The conditional-policy exclusion is inert while no registered
+  # mode maps to it - fm-project-mode.sh --raw is the seam it would return
+  # through - and is kept paired with that seam: both of its legs are legitimate
+  # classifications, so it must never read as a rigor drop.
   STANDING_MODE=$("$FM_ROOT/bin/fm-project-mode.sh" --raw "$PROJ_NAME" 2>/dev/null | cut -d' ' -f1) || STANDING_MODE=
   if [ -n "$STANDING_MODE" ] && [ "$STANDING_MODE" != no-mistakes-prod-only ] \
      && [ "$(delivery_rigor_rank "$MODE")" -lt "$(delivery_rigor_rank "$STANDING_MODE")" ]; then
