@@ -1,7 +1,7 @@
 # Contributing
 
 Thanks for wanting to contribute.
-This repo is a personal fork of firstmate, and changes ship as ordinary pull requests to `main`.
+Synapse is an independent project with its own direction, and changes ship as ordinary pull requests to `main` here.
 
 ## Workflow
 
