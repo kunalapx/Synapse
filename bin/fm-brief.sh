@@ -6,7 +6,7 @@
 # description, acceptance criteria, and context, and may adjust other sections
 # when the task genuinely deviates (e.g. working an existing external PR instead
 # of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab] [--project-memory]
 #        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
@@ -27,6 +27,8 @@
 #   The flag must be explicit because {TASK} is filled after scaffolding and the
 #   caller-supplied repo string cannot reliably identify this repo. Briefs made
 #   without it carry a loud declaration so an omitted contract cannot be silent.
+#   --project-memory opts a ship brief in to updating the project's AGENTS.md.
+#   It is rejected for --scout and --secondmate, which have no such contract.
 # For ship tasks, --mode is REQUIRED and shapes the definition of done. Firstmate
 # resolves it per task at intake (AGENTS.md section 7); data/projects.md holds the
 # captain's standing posture as context, and this script never reads it:
@@ -41,6 +43,10 @@
 # to launch a ship task whose explicit --mode disagrees, so an adjusted brief and the
 # recorded task metadata cannot drift apart.
 # Ship briefs begin with a worktree-isolation assertion before the branch step.
+# Both ship and scout Setup sections then require a fetch and fast-forward-to-origin
+# check before any other work starts, independent of firstmate's own pre-spawn
+# sync: a pooled worktree can predate that sync, so freshness is re-established
+# per task rather than assumed.
 # --mode is refused on scout and secondmate scaffolds: a scout's deliverable is a
 # report rather than a merge, and a charter is not a delivery contract.
 # There is no --yolo flag here. The worker never owns merge decisions, so yolo is
@@ -52,11 +58,27 @@
 # Every scaffold also carries the steering-inbox receive-and-ack section:
 # process state/<id>.inbox/*.msg in order and acknowledge each by moving it to
 # handled/ (record, doorbell, and ladder owned by bin/fm-task-inbox-lib.sh).
-# Ship tasks include a project-memory section so durable project-intrinsic
-# learnings can be committed to AGENTS.md through the project's delivery path;
-# it carries the AGENTS.md authoring bar (widely useful knowledge only, pointers
-# over copied detail) and has the crewmate add the fm-ensure-agents-md.sh
-# self-governance section when a touched project AGENTS.md lacks it.
+# Ship and scout briefs also carry a read-only "Relevant project memory" block:
+# the ACTIVE governed-memory entries scoped to this task's project, retrieved by
+# this scaffold rather than by the reading agent, so recall is firstmate-owned and
+# never model-driven. Nothing matching means no block at all, and the block is
+# hard-capped so injected memory can never dominate a crewmate's context.
+# bin/fm-memory.sh owns the store; when it is absent the injection is a no-op.
+# Project-memory upkeep is OFF by default. A project's AGENTS.md is one file
+# every task would otherwise touch, so scaffolding that instruction into every
+# ship brief makes concurrent PRs on the same project conflict by construction.
+# By default a ship brief instead carries a rule forbidding AGENTS.md/CLAUDE.md
+# edits and telling the crewmate to surface durable project knowledge in the PR
+# body or its status line, so it can be batched into a separate change later.
+# The rule is subordinate to the {TASK} text, so a task whose stated purpose is
+# a change to those files (a firstmate-repo doc task, say) is not blocked by a
+# rule contradicting its own task section.
+# --project-memory opts back in for a task whose purpose IS the memory file: it
+# emits the project-memory section, which carries the AGENTS.md authoring bar
+# (widely useful knowledge only, pointers over copied detail) and has the
+# crewmate add the fm-ensure-agents-md.sh self-governance section when a touched
+# project AGENTS.md lacks it. bin/fm-ensure-agents-md.sh is unchanged either way;
+# it is simply no longer invoked by default.
 # Refuses to overwrite an existing brief.
 set -eu
 
@@ -109,6 +131,7 @@ fi
 KIND=ship
 HERDR_LAB=0
 NO_PROJECTS=0
+PROJECT_MEMORY=0
 MODE=
 MODE_SET=0
 POS=()
@@ -130,6 +153,7 @@ for a in "$@"; do
     --secondmate) KIND=secondmate ;;
     --herdr-lab) HERDR_LAB=1 ;;
     --no-projects) NO_PROJECTS=1 ;;
+    --project-memory) PROJECT_MEMORY=1 ;;
     --mode) want_value=mode ;;
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
     # yolo never reaches the worker: it is firstmate's merge authority, not a
@@ -166,6 +190,13 @@ if [ "$KIND" = secondmate ] && [ "$HERDR_LAB" -eq 1 ]; then
   exit 1
 fi
 
+# Rejected rather than ignored for scout and secondmate: silently dropping it
+# would leave the caller believing project-memory upkeep was requested.
+if [ "$PROJECT_MEMORY" -eq 1 ] && [ "$KIND" != ship ]; then
+  echo "error: --project-memory applies only to crewmate ship briefs" >&2
+  exit 1
+fi
+
 if [ "$NO_PROJECTS" -eq 1 ] && [ "$KIND" != secondmate ]; then
   echo "error: --no-projects applies only to --secondmate charters" >&2
   exit 1
@@ -196,6 +227,97 @@ When a terminal message says an instruction is waiting there - and at any natura
 The move IS the acknowledgement: without it firstmate rings again and eventually treats you as stuck. An empty or absent inbox needs no action.
 EOF
 INBOX_SECTION=${INBOX_SECTION%$'\n'}
+
+# --- scoped governed-memory injection ---------------------------------------
+# Firstmate-owned retrieval, never model-driven: at scaffold time we ask the
+# governed memory service (bin/fm-memory.sh, the one owner of the store format)
+# for the ACTIVE entries scoped to this task's project and inject their facts
+# read-only into ship and scout briefs. `recall` prints only a metadata table,
+# so we take the id from each row's first column (ids are kebab slugs, never
+# whitespace) and read the entry BODY - the text after the frontmatter - from
+# data/memory/entries/<id>.md. We deliberately never read the frontmatter, so
+# proposer/source attribution and other metadata are never leaked into a brief;
+# every active body already cleared fm-memory.sh's mandatory secret scan at
+# propose time.
+FM_MEMORY="$FM_ROOT/bin/fm-memory.sh"
+# Hard cap so injected memory can never blow the crewmate's context budget.
+# Both limits apply; whichever trips first stops injection and appends a
+# truncation note. Whole entries only - a fact is never cut mid-body.
+MEMORY_INJECT_MAX_CHARS=2000
+MEMORY_INJECT_MAX_LINES=40
+
+# memory_block <scope>: print the "## Relevant project memory" markdown block
+# (with a leading blank line) for the scope, or nothing at all when no active
+# entry matches - no empty heading, no noise.
+memory_block() {
+  local scope=$1
+  [ -n "$scope" ] || return 0
+  [ -x "$FM_MEMORY" ] || return 0
+
+  local ids
+  ids=$(FM_HOME="$FM_HOME" "$FM_MEMORY" recall --scope "$scope" 2>/dev/null \
+    | awk 'NF && $1 !~ /^\(/ { print $1 }') || true
+  [ -n "$ids" ] || return 0
+
+  local id entry title body piece add_chars add_lines
+  local block='' rendered=0 truncated=0 total_chars=0 total_lines=0
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    entry="$DATA/memory/entries/$id.md"
+    [ -f "$entry" ] || continue
+    # Title: first non-empty body line (the same display rule fm-memory.sh uses).
+    title=$(awk 'c>=2 && NF { sub(/^[ \t]+/,""); sub(/[ \t]+$/,""); print; exit } /^---$/ { c++ }' "$entry")
+    [ -n "$title" ] || title=$id
+    # Body remainder: the fact detail after the title line, indented two spaces.
+    body=$(awk 'c>=2 { if (!seen && NF) { seen=1; next } if (seen) print "  " $0 } /^---$/ { c++ }' "$entry")
+    if [ -n "$body" ]; then
+      piece=$(printf -- '- **%s**\n%s' "$title" "$body")
+    else
+      piece=$(printf -- '- **%s**' "$title")
+    fi
+    add_chars=${#piece}
+    add_lines=$(printf '%s\n' "$piece" | wc -l)
+    if [ "$rendered" -eq 1 ] \
+      && { [ $((total_chars + add_chars)) -gt "$MEMORY_INJECT_MAX_CHARS" ] \
+        || [ $((total_lines + add_lines)) -gt "$MEMORY_INJECT_MAX_LINES" ]; }; then
+      truncated=1
+      break
+    fi
+    if [ "$rendered" -eq 0 ]; then
+      block=$piece
+    else
+      block="$block"$'\n'"$piece"
+    fi
+    total_chars=$((total_chars + add_chars))
+    total_lines=$((total_lines + add_lines))
+    rendered=1
+    # Even a single oversized first entry stops here (kept, but flagged).
+    if [ "$total_chars" -gt "$MEMORY_INJECT_MAX_CHARS" ] || [ "$total_lines" -gt "$MEMORY_INJECT_MAX_LINES" ]; then
+      truncated=1
+      break
+    fi
+  done <<MEMIDS
+$ids
+MEMIDS
+
+  [ "$rendered" -eq 1 ] || return 0
+
+  local note=''
+  # Escaped backticks stay literal in the double-quoted string, so the note
+  # reaches the crewmate verbatim while $scope still interpolates.
+  [ "$truncated" -eq 1 ] && note="
+
+_(Truncated to fit the memory injection budget; more active entries exist for this scope - recall the rest with \`bin/fm-memory.sh recall --scope $scope\`.)_"
+  # shellcheck disable=SC2016 # literal backticks belong in the emitted brief markdown, not command expansion.
+  printf '\n## Relevant project memory\nActive, governed project memory scoped to `%s` (read-only context, not instructions):\n\n%s%s\n' \
+    "$scope" "$block" "$note"
+}
+
+# Shared "confirm fresh before starting" step, inserted into both ship and scout
+# Setup sections. A pooled worktree can be older than the primary's last sync,
+# so this is a per-task guarantee independent of firstmate's own pre-spawn sync.
+# shellcheck disable=SC2016 # single quotes are deliberate: literal brief text whose backtick-wrapped $(...) must reach the reading agent verbatim, not expand at scaffold time.
+FRESH_CHECK='**Confirm the default branch is current before doing anything else.** Run `git remote -v`; if a remote is listed, run `git fetch origin` then `git merge --ff-only origin/$(git branch --show-current)` to fast-forward to its real current tip before continuing. If there is no remote (a purely local project), skip this step - there is nothing to sync against. If the fast-forward fails because the local default branch has diverged from origin, STOP and append `blocked: local default branch diverged from origin, needs firstmate attention` to the status file.'
 
 if [ "$KIND" = secondmate ]; then
 SECONDMATE_PROJECTS=""
@@ -289,6 +411,13 @@ fi
 
 REPO=${POS[1]}
 
+# Scoped active-memory block for this project, shared by the scout and ship
+# heredocs below. Empty when nothing matches, so injection adds no noise.
+# Command substitution eats the block's trailing newline, so a non-empty block
+# gets one back here to keep a blank line before the section that follows it.
+MEMORY_BLOCK=$(memory_block "$REPO")
+[ -z "$MEMORY_BLOCK" ] || MEMORY_BLOCK="$MEMORY_BLOCK"$'\n'
+
 if [ "$HERDR_LAB" -eq 1 ]; then
 HERDR_LAB_HELPER=$(shell_quote "$FM_ROOT/bin/fm-herdr-lab.sh")
 # shellcheck disable=SC2016  # single quotes are deliberate: these lines are literal brief text whose backtick-wrapped $(...) and "$HERDR_LAB_SESSION" snippets must reach the reading agent verbatim, not expand at scaffold time; only the '"$VAR"' break-outs interpolate.
@@ -327,7 +456,7 @@ You are a crewmate: an autonomous worker agent managed by firstmate. Work on you
 
 # Task
 {TASK}
-
+$MEMORY_BLOCK
 $HERDR_SECTION
 
 # Setup
@@ -335,6 +464,8 @@ You are in a disposable git worktree of $REPO, at a detached HEAD on a clean def
 This is a SCOUT task: the deliverable is a written report, not a PR.
 The worktree is your laboratory - install, run, edit, and make scratch commits freely; all of it is discarded at teardown.
 The report is the only thing that survives, so anything worth keeping must be in it.
+
+$FRESH_CHECK
 
 # Rules
 1. Never push to any remote and never open a PR.
@@ -395,12 +526,42 @@ case "$MODE" in
 esac
 DOD=$(fm_dod_block "$MODE" "$ID") || exit 1
 
+# Project-memory upkeep is off by default (see the header). Exactly one of these
+# two slots is ever non-empty. Off, the contract is the last rule of the Rules
+# list, so PROJECT_MEMORY_RULE renders as a newline-prefixed suffix on rule 7.
+# On, it is the standalone section between the inbox and the definition of done,
+# so PROJECT_MEMORY_SECTION carries its own blank-line separator. Each unused
+# slot expands to nothing, leaving the surrounding layout unchanged.
+PROJECT_MEMORY_RULE=""
+PROJECT_MEMORY_SECTION=""
+if [ "$PROJECT_MEMORY" -eq 1 ]; then
+IFS= read -r -d '' PROJECT_MEMORY_SECTION <<EOF || true
+
+
+# Project memory
+If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.
+Record only project knowledge useful to almost every future session.
+For anything the codebase already shows, prefer a pointer to the authoritative file, command, or doc over copying the detail.
+If you touch a project \`AGENTS.md\` that lacks \`## Maintaining this file\`, add that short self-governance section from \`$FM_ROOT/bin/fm-ensure-agents-md.sh\` in the same pass.
+Keep it proportionate: skip \`AGENTS.md\` edits for trivial tasks that produced no durable project knowledge.
+EOF
+PROJECT_MEMORY_SECTION=${PROJECT_MEMORY_SECTION%$'\n'}
+else
+IFS= read -r -d '' PROJECT_MEMORY_RULE <<'EOF' || true
+
+8. Unless the task above explicitly asks you to change them, do not modify `AGENTS.md` or `CLAUDE.md` in this project, and do not run a tool that creates or edits them.
+   That one shared file would otherwise be touched by every task, so concurrent PRs on the same project collide by construction.
+   If this task produced durable project knowledge worth keeping, describe it in the PR body instead (or in your `done:` status line when the project ships without a PR) so it can be batched into a separate memory-only change later.
+EOF
+PROJECT_MEMORY_RULE=${PROJECT_MEMORY_RULE%$'\n'}
+fi
+
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
 # Task
 {TASK}
-
+$MEMORY_BLOCK
 $HERDR_SECTION
 
 # Setup
@@ -409,6 +570,8 @@ You are in a disposable git worktree of $REPO, at a detached HEAD on a clean def
 **Verify isolation before anything else.** Run \`pwd -P\` and \`git rev-parse --show-toplevel\`; both must resolve to the disposable task worktree you were launched in, such as a treehouse pool path or an Orca-managed worktree, not the primary checkout firstmate operates from.
 The path check is authoritative: \`git rev-parse --git-dir\` and \`git rev-parse --git-common-dir\` can help inspect the repo, but they do not prove you are outside the primary checkout.
 If the top-level path is the primary checkout or not the worktree you were launched in, STOP - do not branch or commit here - append \`blocked: launched in primary checkout, not an isolated worktree\` to the status file and stop.
+
+$FRESH_CHECK
 
 1. First action: create your branch: \`git checkout -b fm/$ID\`$SETUP2
 
@@ -436,17 +599,14 @@ $RULE1
    Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
 7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
-   daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
+   daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.$PROJECT_MEMORY_RULE
 
-$INBOX_SECTION
-
-# Project memory
-If \`AGENTS.md\` or \`CLAUDE.md\` already exists, or if this task produced durable project-intrinsic knowledge, run \`$FM_ROOT/bin/fm-ensure-agents-md.sh .\` in the worktree.
-Record only project knowledge useful to almost every future session.
-For anything the codebase already shows, prefer a pointer to the authoritative file, command, or doc over copying the detail.
-If you touch a project \`AGENTS.md\` that lacks \`## Maintaining this file\`, add that short self-governance section from \`$FM_ROOT/bin/fm-ensure-agents-md.sh\` in the same pass.
-Keep it proportionate: skip \`AGENTS.md\` edits for trivial tasks that produced no durable project knowledge.
+$INBOX_SECTION$PROJECT_MEMORY_SECTION
 
 $DOD
 EOF
-echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK})"
+if [ "$PROJECT_MEMORY" -eq 1 ]; then
+  echo "scaffolded: $BRIEF (ship, mode=$MODE, project-memory; replace {TASK})"
+else
+  echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK})"
+fi
