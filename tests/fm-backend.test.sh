@@ -902,6 +902,71 @@ test_spawn_symlinked_project_prefix_avoids_false_refusal() {
   pass "fm-spawn.sh: a project reached through a symlinked prefix (e.g. macOS /tmp -> /private/tmp) does not trip the isolation guard's false refusal"
 }
 
+# --- a foreign git toplevel must never become the crewmate's worktree -------
+#
+# The isolation guard's pre-ownership checks accept any self-consistent git
+# toplevel that is merely distinct from the project dir. A freshly created
+# pane can report some OTHER real checkout entirely before treehouse's own
+# `cd` lands (its pre-`-c` starting directory), and on a firstmate-on-itself
+# task the worst case is the PRIMARY firstmate checkout - a distinct toplevel
+# of the very same repo. This drives the real bin/fm-spawn.sh against a fake
+# tmux that reports such a foreign main checkout on EVERY poll, and asserts
+# the spawn refuses rather than adopting it: no worktree= is recorded, and the
+# foreign checkout is left exactly as it was, with no branch, no commit, and
+# no turn-end hook written into it.
+make_spawn_fixed_path_fakebin() {  # <dir> <path-reported-every-poll> -> echoes fakebin dir
+  local dir=$1 fixed=$2 fb="$1/fakebin"
+  mkdir -p "$fb"
+  cat > "$fb/tmux" <<SH
+#!/usr/bin/env bash
+set -u
+{ printf 'tmux'; for a in "\$@"; do printf '\\x1f%s' "\$a"; done; printf '\\n'; } >> "\${FM_TMUX_LOG:?}"
+case "\${1:-}" in
+  display-message)
+    for a in "\$@"; do case "\$a" in *pane_current_path*) printf '%s\\n' "$fixed"; exit 0 ;; esac; done
+    printf 'firstmate\\n'; exit 0 ;;
+  list-windows) exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$fb/tmux"
+  fm_fake_exit0 "$fb" treehouse
+  printf '%s\n' "$fb"
+}
+
+test_spawn_refuses_a_foreign_git_toplevel_as_the_worktree() {
+  local proj foreign id fb data state config log out rc branch_before branch_after
+  proj="$TMP_ROOT/foreign-proj"; foreign="$TMP_ROOT/foreign-other"
+  id="spawnforeigntoplevel"
+  fm_git_init_commit "$proj"
+  fm_git_init_commit "$foreign"
+  branch_before=$(git -C "$foreign" rev-parse --abbrev-ref HEAD)
+  fb=$(make_spawn_fixed_path_fakebin "$TMP_ROOT/foreign-fake" "$foreign")
+  data="$TMP_ROOT/foreign-data"; mkdir -p "$data/$id"
+  printf 'test brief content\n' > "$data/$id/brief.md"
+  state="$TMP_ROOT/foreign-state"; config="$TMP_ROOT/foreign-config"
+  mkdir -p "$state" "$config"
+  log="$TMP_ROOT/foreign-spawn.log"
+
+  out=$(run_spawn_case "$ROOT" "$fb" "$log" "$state" "$data" "$config" "$proj" -- "$id" "$proj" claude --mode no-mistakes --yolo off 2>&1)
+  rc=$?
+  expect_code 1 "$rc" "fm-spawn.sh must refuse a foreign git toplevel as the crewmate's worktree"$'\n'"$out"
+  assert_contains "$out" "is not a treehouse-managed linked worktree" \
+    "the refusal did not name the missing treehouse-ownership signal"
+  assert_absent "$state/$id.meta" "a refused spawn must not record state/<id>.meta"
+
+  # The whole point of the guard: the foreign checkout is untouched.
+  branch_after=$(git -C "$foreign" rev-parse --abbrev-ref HEAD)
+  [ "$branch_after" = "$branch_before" ] \
+    || fail "the refused spawn moved the foreign checkout off $branch_before onto $branch_after"
+  [ -z "$(git -C "$foreign" status --porcelain)" ] \
+    || fail "the refused spawn dirtied the foreign checkout"
+  assert_absent "$foreign/.claude" "the refused spawn installed a turn-end hook in the foreign checkout"
+
+  rm -rf "/tmp/fm-$id"
+  pass "fm-spawn.sh: a foreign git toplevel reported by the pane is refused, leaving that checkout untouched"
+}
+
 # --- old vs new: fm-teardown.sh ----------------------------------------------
 
 make_teardown_fakebin() {  # <dir> -> echoes fakebin dir; logs tmux+treehouse calls
@@ -1133,6 +1198,7 @@ test_backend_of_selector_matches_explicit_target_meta
 test_send_tmux_contract
 test_peek_conformance_old_vs_new
 test_spawn_symlinked_project_prefix_avoids_false_refusal
+test_spawn_refuses_a_foreign_git_toplevel_as_the_worktree
 test_teardown_conformance_old_vs_new
 test_spawn_refuses_unknown_backend_flag
 test_spawn_refuses_codex_app_backend_flag

@@ -1833,6 +1833,33 @@ real_path_or_raw() {  # <path>
 # herdr-sm-spaces-k4). Both branches converge on the same $T ("target") string
 # that every downstream operation (send/capture/kill) already treats as opaque
 # per-backend routing (fm_backend_resolve_selector).
+# is_linked_worktree_of <project-abs> <candidate-path>: true only when
+# <candidate-path> is a genuine LINKED worktree - never the main/primary
+# checkout - of the exact same repository as <project-abs>. "A distinct git
+# toplevel" is not by itself a positive treehouse-ownership signal: the
+# primary firstmate checkout is ALSO a distinct git toplevel, of the very same
+# repo whenever a task targets firstmate's own repo, and a freshly created
+# pane can report some other real checkout entirely before treehouse's `cd`
+# lands, so a merely-distinct toplevel would otherwise be wrongly accepted.
+# Git already distinguishes a repo's main worktree from its linked ones: the
+# main worktree's --git-dir IS its --git-common-dir, while every worktree
+# treehouse hands out is a linked worktree whose --git-dir is a
+# `<common-dir>/worktrees/<id>` subdirectory. Matching --git-common-dir
+# against the project's own further confirms the candidate belongs to the
+# TARGET project's repository, not some other one. --path-format=absolute
+# keeps the comparison meaningful: without it, git reports the main worktree's
+# --git-dir as the relative ".git" but a linked worktree's as an absolute
+# path, so a naive string compare would always differ regardless of ownership.
+is_linked_worktree_of() {  # <project-abs> <candidate-path>
+  local project=$1 candidate=$2 proj_common cand_gitdir cand_common
+  proj_common=$(git -C "$project" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+  cand_gitdir=$(git -C "$candidate" rev-parse --path-format=absolute --git-dir 2>/dev/null) || return 1
+  cand_common=$(git -C "$candidate" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+  [ -n "$proj_common" ] && [ -n "$cand_gitdir" ] && [ -n "$cand_common" ] || return 1
+  [ "$cand_gitdir" != "$cand_common" ] || return 1
+  [ "$cand_common" = "$proj_common" ]
+}
+
 validate_spawn_worktree() {  # <source> <inspect-target>
   local source=$1 inspect_target=$2 wt_real proj_real wt_top wt_top_real
   wt_real=
@@ -1847,6 +1874,15 @@ validate_spawn_worktree() {  # <source> <inspect-target>
   fi
   if [ -z "$wt_real" ] || [ -z "$wt_top_real" ] || [ "$wt_real" != "$wt_top_real" ] || [ "$wt_real" = "$proj_real" ]; then
     echo "error: $source did not yield an isolated worktree (resolved '$WT'; worktree root '${wt_top:-none}'; primary '$PROJ_ABS'); refusing to launch to avoid tangling the primary checkout. Inspect target $inspect_target" >&2
+    exit 1
+  fi
+  # A distinct, self-consistent toplevel is necessary but not sufficient: the
+  # primary checkout of the very same repository satisfies every check above.
+  # Require the positive treehouse-ownership signal too. Orca owns and creates
+  # its own worktree directly, with no treehouse pool involved, so that signal
+  # is only asserted for the treehouse path.
+  if [ "$BACKEND" != orca ] && ! is_linked_worktree_of "$PROJ_ABS" "$WT"; then
+    echo "error: $source resolved '$WT', which is not a treehouse-managed linked worktree of $PROJ_ABS (it is that repo's main checkout, or belongs to a different repository); refusing to launch to avoid tangling the primary checkout. Inspect target $inspect_target" >&2
     exit 1
   fi
 }
@@ -2442,7 +2478,10 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # two consecutive reads to agree on the same non-project path before accepting it;
   # a mismatch just becomes the new candidate rather than resetting the wait, so a
   # pane that is already settled by the first real read only costs the one existing
-  # inter-poll sleep as confirmation, not a whole extra cycle on top.
+  # inter-poll sleep as confirmation, not a whole extra cycle on top. Two agreeing
+  # reads still only prove the pane settled, never that it settled on a worktree
+  # this project owns; validate_spawn_worktree's treehouse-ownership assertion below
+  # is what refuses a settled-but-foreign path, including the primary checkout.
   candidate=""
   for _ in $(seq 1 60); do
     p=$(spawn_current_path "$WT_TARGET" || true)
