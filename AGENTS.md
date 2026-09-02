@@ -266,7 +266,7 @@ Route durable knowledge to its most specific owner:
 
 Synapse never writes a project's `AGENTS.md` directly.
 An agent creates or updates it lazily through the project's selected delivery path, using `bin/fm-ensure-agents-md.sh` and preferring pointers to authoritative sources over copied detail.
-Project-memory upkeep is its own dedicated execution task scaffolded with `bin/fm-brief.sh --project-memory`, never a side effect of unrelated work, because that one shared file would otherwise put every concurrent PR on the same project into conflict (section 11).
+Project-memory upkeep is its own dedicated execution task scaffolded with `bin/fm-brief.sh --project-memory`, never a side effect of unrelated work; section 11 owns that rule and why.
 Keep agent pool delivery posture and boss-private strategy out of project memory.
 When the boss invokes `/stow`, load the `stow` skill for its memory curation, knowledge routing, and persistence of the open work records this session is holding; it files and corrects only the open work that session is holding, and never reconciles the backlog against repository or PR reality.
 
@@ -517,7 +517,7 @@ Use its scaffold as the contract, then replace every `{TASK}` placeholder with a
 Keep additions task-specific rather than repeating lifecycle instructions, and alter generated sections only when the task genuinely differs from the standard shape.
 
 Every execution task spec must retain the worktree-isolation assertion and stop if launched in the primary checkout.
-An ordinary execution task spec must NOT scaffold project `AGENTS.md` or `CLAUDE.md` edits: it forbids touching those files and tells the agent to surface durable project knowledge in its PR body or status line instead, because that one shared file would otherwise put every concurrent PR on the same project into conflict (section 6).
+An ordinary execution task spec must NOT scaffold project `AGENTS.md` or `CLAUDE.md` edits: it forbids touching those files and tells the agent to surface durable project knowledge in its PR body or status line instead, because that one shared file would otherwise put every concurrent PR on the same project into conflict.
 That rule is subordinate to the task text, so a task whose stated purpose IS a change to those files is never blocked by it; add `--project-memory` only for a task whose purpose is that memory file.
 If an execution task touches Synapse's shared tracked material, explicitly require `firstmate-coding-guidelines` before editing.
 If a task will drive Herdr lifecycle behavior, scaffold with `--herdr-lab`; if that need appears after an unguarded scaffold, stop and regenerate rather than adding commands by hand.
