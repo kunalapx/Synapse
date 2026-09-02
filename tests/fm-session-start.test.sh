@@ -4,7 +4,10 @@
 # (recovery) into one ordered digest.
 #
 # Coverage:
+#   - the Synapse startup banner leading the digest ahead of every section
 #   - absent-file markers vs empty-but-present files in the context digest
+#   - the active governed-memory block: always labeled, and an absent or
+#     empty store printing (no memory) rather than an ABSENT marker
 #   - the lock-refusal read-only path: banner leads, every mutating step is
 #     skipped (including bootstrap's seven mutating sweeps, verified by their
 #     ABSENCE), the digest still completes
@@ -740,6 +743,74 @@ EOF
   assert_contains "$cap_section" "(present, empty)" "empty-but-present captain.md was not distinguished from ABSENT"
 
   pass "context digest distinguishes ABSENT, empty-but-present, and populated files"
+}
+
+# --- startup banner ----------------------------------------------------------
+
+test_startup_banner_leads_the_digest() {
+  local rec root home fakebin out banner_line session_line lock_line
+  rec=$(new_world startup-banner)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  # The framed wordmark and both subtitle lines render byte-for-byte.
+  assert_contains "$out" "███████╗██╗" "startup banner wordmark missing"
+  assert_contains "$out" "MomentScience Engineering" "startup banner subtitle missing"
+  assert_contains "$out" "orchestration · memory · review" "startup banner tagline missing"
+  # The box frame is intact (top-left and bottom-right corners present).
+  assert_contains "$out" "╔═══" "startup banner top border missing"
+  assert_contains "$out" "═══╝" "startup banner bottom border missing"
+
+  # It leads the digest: ahead of the SESSION START header and the LOCK section.
+  banner_line=$(printf '%s\n' "$out" | grep -n 'MomentScience Engineering' | head -1 | cut -d: -f1)
+  session_line=$(printf '%s\n' "$out" | grep -n 'SESSION START -' | head -1 | cut -d: -f1)
+  lock_line=$(printf '%s\n' "$out" | grep -n '^LOCK$' | head -1 | cut -d: -f1)
+  [ -n "$banner_line" ] && [ -n "$session_line" ] && [ -n "$lock_line" ] || fail "banner/session/lock lines missing: $out"
+  [ "$banner_line" -lt "$session_line" ] || fail "startup banner did not precede the SESSION START header"
+  [ "$session_line" -lt "$lock_line" ] || fail "SESSION START header did not precede the LOCK section"
+
+  pass "startup banner leads the digest with the captain's framed design intact"
+}
+
+# --- active governed memory in the context digest -----------------------------
+
+# The active-memory block is the last line of the context digest, so it is the
+# first thing a truncated tail takes. This test pins the two properties that
+# survive whether or not the store has anything in it: the subsection is always
+# labeled, and an absent or empty store prints fm-memory.sh's own "(no memory)"
+# marker rather than the ABSENT marker print_file_or_absent uses. Conflating the
+# two would make an empty store look like a missing curated-memory file.
+test_active_memory_absent_semantics() {
+  local rec root home fakebin out memory_body
+  rec=$(new_world memory-digest-absent)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "active memory (data/memory, active entries only)" \
+    "digest missing the active-memory subsection with no store"
+
+  # Bounded to the block itself: start after its subsection header, stop at the
+  # NEXT STEP section rule, so a later section can neither satisfy nor trip the
+  # assertions below.
+  memory_body=$(printf '%s\n' "$out" |
+    awk '/^active memory \(data\/memory, active entries only\)$/{flag=1;next} /^=====/{flag=0} flag')
+  assert_contains "$memory_body" "(no memory)" \
+    "absent memory store did not print fm-memory.sh's (no memory) marker"
+  case "$memory_body" in
+    *ABSENT*) fail "the active-memory block printed an ABSENT marker instead of (no memory): $memory_body" ;;
+  esac
+
+  pass "session start memory block prints (no memory) for an absent store, never ABSENT"
 }
 
 # --- lock refusal: read-only path --------------------------------------------
@@ -2549,7 +2620,9 @@ EOF
   pass "session start rejects Pi loaded markers from previous sessions"
 }
 
+test_startup_banner_leads_the_digest
 test_context_digest_absent_empty_present
+test_active_memory_absent_semantics
 test_lock_refusal_read_only_path
 test_lock_write_failure_read_only_path
 test_trace_context_effective_state_is_frozen_after_lock
