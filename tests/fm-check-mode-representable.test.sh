@@ -218,6 +218,28 @@ test_tampered_check_is_still_rejected_where_modes_are_ignored() {
   pass "the hash binding still refuses tampered bytes where the mode assertion is skipped"
 }
 
+test_unregistered_check_is_still_refused_where_modes_are_ignored() {
+  local home fakebin status
+  home=$(make_home unregistered)
+  write_check "$home" intruder
+  fakebin=$(mode_blind_bin "$home")
+
+  # Never registered: the mode assertion being skipped must not stand in for
+  # the trust binding, or a planted check would reach the watcher's executor.
+  status=0
+  run_lib "$fakebin" fm_custom_check_snapshot_prepare "$home/state" intruder || status=$?
+  expect_code 1 "$status" "an unregistered check must be refused where modes are ignored"
+
+  # A trust binding is not enough either; it has to name these bytes.
+  printf 'fm-custom-check-v1\n%s\n' "$(printf 'a%.0s' $(seq 1 64))" \
+    > "$home/state/intruder.check-trust"
+  status=0
+  run_lib "$fakebin" fm_custom_check_snapshot_prepare "$home/state" intruder || status=$?
+  expect_code 1 "$status" "a trust binding for other bytes must be refused where modes are ignored"
+
+  pass "a check without a matching trust binding is refused where modes are ignored"
+}
+
 test_wrong_mode_is_still_rejected_on_a_posix_filesystem() {
   local home out err status
   home=$(make_home posix)
@@ -270,4 +292,5 @@ test_probe_answers_per_filesystem_and_leaves_nothing_behind
 test_probe_enforces_when_it_cannot_conclude
 test_registration_and_verification_work_where_modes_are_ignored
 test_tampered_check_is_still_rejected_where_modes_are_ignored
+test_unregistered_check_is_still_refused_where_modes_are_ignored
 test_wrong_mode_is_still_rejected_on_a_posix_filesystem
