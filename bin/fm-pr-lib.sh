@@ -263,10 +263,63 @@ fm_pr_sha256() {
   fi
 }
 
+# Whether a mode assertion inside <directory> carries any information.
+#
+# Some filesystems cannot represent Unix modes at all. A 9p/DrvFs Windows mount
+# under WSL reports every file as 777 and accepts chmod silently without
+# changing anything, so an exact-mode assertion there is not a weaker check but
+# one that can never pass: a caller requiring a private mode rejects even the
+# file it just created itself.
+#
+# Detection is empirical, never a filesystem-name allowlist. Create a probe file
+# in the SAME directory as the target, chmod it to the exact mode the caller
+# wants, and read the mode back; only the observed result decides. Matching
+# names from `df -T` or /proc/mounts would both miss the next filesystem with
+# this property and misjudge one whose behavior diverges from its type name,
+# and it answers a different question than the one the caller is asking.
+#
+# The probe is per-mode, not per-filesystem: a filesystem that clamps every
+# file to one mode can represent that mode and no other, so asking about the
+# exact mode the caller needs keeps enforcement on for the clamped value.
+#
+# Returns 0 when the mode is representable and the caller must enforce its mode
+# assertion, 1 when it is not and the assertion carries no information. Every
+# inconclusive outcome - the probe cannot be created, chmod itself fails, the
+# mode cannot be read back - also returns 0, so an unexplained failure keeps
+# the strict behavior instead of silently dropping a check.
+#
+# Deliberately uncached. The only caller probes on the path where a mode
+# assertion has ALREADY failed, so a filesystem that represents modes never
+# probes at all, and the filesystems that do probe pay four short-lived
+# processes per validated file - 30 validations measured at 0.6s on a 9p mount,
+# against a 300s watcher check sweep. Caching would have to key on the
+# filesystem and then stay honest across a remount inside one long-lived
+# watcher process, which buys nothing measurable here.
+fm_pr_mode_representable() {
+  local directory=$1 mode=$2 probe observed chmod_status=0
+  probe=$(mktemp "$directory/.fm-mode-probe.XXXXXX" 2>/dev/null) || return 0
+  chmod "$mode" "$probe" 2>/dev/null || chmod_status=1
+  observed=$(fm_pr_file_mode "$probe")
+  rm -f -- "$probe"
+  [ "$chmod_status" -eq 0 ] || return 0
+  [ -n "$observed" ] || return 0
+  [ "$observed" = "$mode" ]
+}
+
 fm_pr_private_file_valid() {
-  local path=$1 mode=$2 device=$3
+  local path=$1 mode=$2 device=$3 directory
   [ -f "$path" ] && [ ! -L "$path" ] || return 1
-  [ "$(fm_pr_file_mode "$path")" = "$mode" ] || return 1
+  if [ "$(fm_pr_file_mode "$path")" != "$mode" ]; then
+    # A mismatch only rejects where the filesystem can represent the mode at
+    # all. Where it cannot, the artifact's hash binding remains the control
+    # that proves its bytes, and the device and hard-link assertions below
+    # still hold; the mode bits were only defence-in-depth on top of them.
+    case "$path" in
+      */*) directory=${path%/*}; [ -n "$directory" ] || directory=/ ;;
+      *) directory=. ;;
+    esac
+    fm_pr_mode_representable "$directory" "$mode" && return 1
+  fi
   [ "$(fm_pr_file_device "$path")" = "$device" ] || return 1
   [ "$(fm_pr_file_link_count "$path")" = 1 ]
 }

@@ -55,13 +55,11 @@ fm_custom_check_snapshot_prepare() {
   FM_CUSTOM_CHECK_SNAPSHOT=$(mktemp "$state/.fm-custom-check.XXXXXX") || return 1
   cp "$check" "$FM_CUSTOM_CHECK_SNAPSHOT" || { fm_custom_check_snapshot_cleanup; return 1; }
   chmod 0600 "$FM_CUSTOM_CHECK_SNAPSHOT" || { fm_custom_check_snapshot_cleanup; return 1; }
-  [ -f "$FM_CUSTOM_CHECK_SNAPSHOT" ] && [ ! -L "$FM_CUSTOM_CHECK_SNAPSHOT" ] \
-    || { fm_custom_check_snapshot_cleanup; return 1; }
-  [ "$(fm_pr_file_mode "$FM_CUSTOM_CHECK_SNAPSHOT")" = 600 ] \
-    || { fm_custom_check_snapshot_cleanup; return 1; }
-  [ "$(fm_pr_file_device "$FM_CUSTOM_CHECK_SNAPSHOT")" = "$state_device" ] \
-    || { fm_custom_check_snapshot_cleanup; return 1; }
-  [ "$(fm_pr_file_link_count "$FM_CUSTOM_CHECK_SNAPSHOT")" = 1 ] \
+  # The same four assertions this hand-rolled, in the one owner that also knows
+  # when an exact-mode assertion is meaningless because the filesystem cannot
+  # represent modes. Duplicating them here would re-break the snapshot on such
+  # a filesystem even after the register path was taught about it.
+  fm_pr_private_file_valid "$FM_CUSTOM_CHECK_SNAPSHOT" 600 "$state_device" \
     || { fm_custom_check_snapshot_cleanup; return 1; }
   hash=$(fm_custom_check_sha256 "$FM_CUSTOM_CHECK_SNAPSHOT") \
     || { fm_custom_check_snapshot_cleanup; return 1; }
